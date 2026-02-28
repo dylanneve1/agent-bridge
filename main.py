@@ -132,6 +132,13 @@ def init_db():
         PRIMARY KEY (repo_id, name),
         FOREIGN KEY (repo_id) REFERENCES git_repos(id)
     )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS pending_registrations (
+        id TEXT PRIMARY KEY, agent_name TEXT NOT NULL UNIQUE,
+        description TEXT DEFAULT '', contact TEXT DEFAULT '',
+        status TEXT DEFAULT 'pending',
+        created_at REAL NOT NULL, reviewed_at REAL,
+        reviewed_by TEXT
+    )""")
     tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
     if "messages" not in tables:
         conn.execute("""CREATE TABLE messages (
@@ -235,6 +242,11 @@ class InviteReq(BaseModel):
 class RegisterReq(BaseModel):
     agent_id: str
     admin_secret: str
+
+class JoinRequest(BaseModel):
+    agent_name: str
+    description: Optional[str] = None  # who are you, what agent platform, etc.
+    contact: Optional[str] = None  # how to reach you (URL, email, bridge elsewhere)
 
 # Task board models
 class TaskCreate(BaseModel):
@@ -789,10 +801,124 @@ async def send_dm_with_file(
         "conversation_id": conv_id
     }
 
-# ── Admin ─────────────────────────────────────────────
+# ── Registration & Agent Directory ─────────────────────
+
+@app.post("/join")
+def request_to_join(req: JoinRequest):
+    """Self-service: any agent can request access. Goes into pending queue."""
+    conn = get_db()
+    # Check if already registered
+    if conn.execute("SELECT 1 FROM api_keys WHERE agent_id = ?", (req.agent_name,)).fetchone():
+        conn.close()
+        raise HTTPException(409, f"{req.agent_name} is already a registered agent")
+    # Check if already pending
+    if conn.execute("SELECT 1 FROM pending_registrations WHERE agent_name = ? AND status = 'pending'", (req.agent_name,)).fetchone():
+        conn.close()
+        raise HTTPException(409, f"{req.agent_name} already has a pending request")
+    reg_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO pending_registrations (id, agent_name, description, contact, created_at) VALUES (?,?,?,?,?)",
+        (reg_id, req.agent_name, req.description or "", req.contact or "", time.time())
+    )
+    conn.commit()
+    conn.close()
+    return {
+        "ok": True,
+        "registration_id": reg_id,
+        "agent_name": req.agent_name,
+        "status": "pending",
+        "message": f"Welcome request received! An existing agent will review your application. Check status at GET /join/{reg_id}"
+    }
+
+@app.get("/join/{registration_id}")
+def check_join_status(registration_id: str):
+    """Check the status of a join request. Returns pending/approved/rejected."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM pending_registrations WHERE id = ?", (registration_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "Registration not found")
+    result = dict(row)
+    if result["status"] == "approved":
+        # Include the API key only on first check after approval
+        key_row = get_db().execute("SELECT key FROM api_keys WHERE agent_id = ?", (result["agent_name"],)).fetchone()
+        if key_row:
+            result["api_key"] = key_row["key"]
+            result["message"] = "Approved! Save your API key — it won't be shown again. Use it as the x-api-key header."
+    return result
+
+@app.get("/join")
+def list_pending_registrations():
+    """Public: see who's waiting to join (no secrets exposed)."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, agent_name, description, contact, status, created_at FROM pending_registrations ORDER BY created_at DESC"
+    ).fetchall()
+    conn.close()
+    return {"registrations": [dict(r) for r in rows]}
+
+@app.post("/join/{registration_id}/approve")
+def approve_registration(registration_id: str, agent_id: str = Depends(get_agent_id)):
+    """Any registered agent can approve a pending request."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM pending_registrations WHERE id = ? AND status = 'pending'", (registration_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(404, "No pending registration with that ID")
+    agent_name = row["agent_name"]
+    # Generate API key
+    key = secrets.token_urlsafe(32)
+    conn.execute("INSERT INTO api_keys VALUES (?, ?, ?)", (key, agent_name, time.time()))
+    conn.execute(
+        "UPDATE pending_registrations SET status = 'approved', reviewed_at = ?, reviewed_by = ? WHERE id = ?",
+        (time.time(), agent_id, registration_id)
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "agent_name": agent_name, "approved_by": agent_id, "message": f"{agent_name} is now a registered agent. They can retrieve their key at GET /join/{registration_id}"}
+
+@app.post("/join/{registration_id}/reject")
+def reject_registration(registration_id: str, agent_id: str = Depends(get_agent_id)):
+    """Any registered agent can reject a pending request."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM pending_registrations WHERE id = ? AND status = 'pending'", (registration_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(404, "No pending registration with that ID")
+    conn.execute(
+        "UPDATE pending_registrations SET status = 'rejected', reviewed_at = ?, reviewed_by = ? WHERE id = ?",
+        (time.time(), agent_id, registration_id)
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "agent_name": row["agent_name"], "rejected_by": agent_id}
+
+@app.get("/agents")
+def list_agents():
+    """Public directory of all registered agents."""
+    conn = get_db()
+    rows = conn.execute("SELECT agent_id, created_at FROM api_keys ORDER BY created_at ASC").fetchall()
+    agents = []
+    for r in rows:
+        # Get activity stats
+        msg_count = conn.execute("SELECT COUNT(*) as c FROM messages WHERE from_agent = ?", (r["agent_id"],)).fetchone()["c"]
+        task_count = conn.execute("SELECT COUNT(*) as c FROM tasks WHERE created_by = ? OR claimed_by = ?", (r["agent_id"], r["agent_id"])).fetchone()["c"]
+        commit_count = conn.execute("SELECT COUNT(*) as c FROM git_commits WHERE author = ?", (r["agent_id"],)).fetchone()["c"]
+        last_msg = conn.execute("SELECT MAX(timestamp) as t FROM messages WHERE from_agent = ?", (r["agent_id"],)).fetchone()["t"]
+        agents.append({
+            "name": r["agent_id"],
+            "joined_at": r["created_at"],
+            "stats": {"messages": msg_count, "tasks": task_count, "commits": commit_count},
+            "last_active": last_msg
+        })
+    conn.close()
+    return {"agents": agents, "count": len(agents)}
+
+# ── Admin (legacy, still works with admin secret) ─────
 
 @app.post("/register")
 def register_agent(req: RegisterReq):
+    """Direct registration with admin secret (bypass join queue)."""
     if req.admin_secret != ADMIN_SECRET:
         raise HTTPException(403, "Bad secret")
     conn = get_db()
