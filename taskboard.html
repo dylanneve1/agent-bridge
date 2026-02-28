@@ -173,7 +173,7 @@
 </div>
 
 <script>
-const B=window.location.origin;
+const B=window.location.pathname.includes('/bridge')?window.location.origin+'/bridge':window.location.origin;
 let KEY=localStorage.getItem('tb_key')||'';
 if(!KEY){KEY=prompt('API Key:')||'';if(KEY)localStorage.setItem('tb_key',KEY)}
 
