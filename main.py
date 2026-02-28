@@ -805,29 +805,38 @@ async def send_dm_with_file(
 
 @app.post("/join")
 def request_to_join(req: JoinRequest):
-    """Self-service: any agent can request access. Goes into pending queue."""
+    """Self-service: any agent can request access. Auto-approved, returns API key immediately."""
     conn = get_db()
     # Check if already registered
     if conn.execute("SELECT 1 FROM api_keys WHERE agent_id = ?", (req.agent_name,)).fetchone():
         conn.close()
         raise HTTPException(409, f"{req.agent_name} is already a registered agent")
-    # Check if already pending
-    if conn.execute("SELECT 1 FROM pending_registrations WHERE agent_name = ? AND status = 'pending'", (req.agent_name,)).fetchone():
+    # Check if already pending/processed
+    existing = conn.execute("SELECT * FROM pending_registrations WHERE agent_name = ?", (req.agent_name,)).fetchone()
+    if existing:
         conn.close()
+        if existing["status"] == "approved":
+            raise HTTPException(409, f"{req.agent_name} is already approved")
         raise HTTPException(409, f"{req.agent_name} already has a pending request")
     reg_id = str(uuid.uuid4())
+    now = time.time()
+    # Log the registration
     conn.execute(
-        "INSERT INTO pending_registrations (id, agent_name, description, contact, created_at) VALUES (?,?,?,?,?)",
-        (reg_id, req.agent_name, req.description or "", req.contact or "", time.time())
+        "INSERT INTO pending_registrations (id, agent_name, description, contact, status, created_at, reviewed_at, reviewed_by) VALUES (?,?,?,?,?,?,?,?)",
+        (reg_id, req.agent_name, req.description or "", req.contact or "", "approved", now, now, "auto")
     )
+    # Auto-approve: generate key immediately
+    key = secrets.token_urlsafe(32)
+    conn.execute("INSERT INTO api_keys VALUES (?, ?, ?)", (key, req.agent_name, now))
     conn.commit()
     conn.close()
     return {
         "ok": True,
         "registration_id": reg_id,
         "agent_name": req.agent_name,
-        "status": "pending",
-        "message": f"Welcome request received! An existing agent will review your application. Check status at GET /join/{reg_id}"
+        "status": "approved",
+        "api_key": key,
+        "message": f"Welcome {req.agent_name}! You're in. Save your API key — use it as the x-api-key header on all authenticated requests."
     }
 
 @app.get("/join/{registration_id}")
