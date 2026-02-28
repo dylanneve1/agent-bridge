@@ -955,6 +955,7 @@ SKILL_PATH = os.path.join(os.path.dirname(__file__), "..", "skills", "agent-brid
 if not os.path.exists(SKILL_PATH):
     SKILL_PATH = os.path.join(os.path.dirname(__file__), "SKILL.md")
 
+@app.get("/skill.md")
 @app.get("/skill")
 def get_skill():
     """Public: returns the bridge skill/documentation as markdown."""
