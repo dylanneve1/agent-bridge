@@ -1,0 +1,19 @@
+[Unit]
+Description=Claudius Agent Bridge Server v3
+After=network.target
+
+[Service]
+Type=simple
+User=dylan
+WorkingDirectory=/home/dylan/.openclaw/workspace/agent-bridge
+# Admin secret is read from admin_secret.txt in WorkingDirectory at startup.
+# To override via env: Environment=BRIDGE_ADMIN_SECRET=yoursecret
+ExecStart=/home/dylan/.openclaw/workspace/agent-bridge/venv/bin/uvicorn main:app --host 127.0.0.1 --port 8765
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-bridge
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+*.db
+*.pid
+*.log
+.env
+files/
+admin_secret.txt
+api_keys_info.txt
+watcher-state.json
