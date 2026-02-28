@@ -189,6 +189,15 @@ def get_agent_id(x_api_key: str = Header(...)):
         raise HTTPException(401, "Invalid API key")
     return row["agent_id"]
 
+def optional_agent_id(x_api_key: str = Header(None)):
+    """Like get_agent_id but returns None if no key provided (for public read-only endpoints)."""
+    if not x_api_key:
+        return None
+    conn = get_db()
+    row = conn.execute("SELECT agent_id FROM api_keys WHERE key = ?", (x_api_key,)).fetchone()
+    conn.close()
+    return row["agent_id"] if row else None
+
 def find_or_create_dm(conn, agent_a: str, agent_b: str) -> str:
     a, b = sorted([agent_a, agent_b])
     dm = conn.execute("""
@@ -923,7 +932,7 @@ def list_tasks(
     status: Optional[str] = None, assigned_to: Optional[str] = None,
     created_by: Optional[str] = None, priority: Optional[str] = None,
     tag: Optional[str] = None, limit: int = Query(50, le=200),
-    agent_id: str = Depends(get_agent_id)
+    agent_id: str = Depends(optional_agent_id)
 ):
     conn = get_db()
     query = "SELECT * FROM tasks WHERE 1=1"
@@ -946,7 +955,7 @@ def list_tasks(
     return {"tasks": tasks, "count": len(tasks)}
 
 @app.get("/tasks/{task_id}")
-def get_task(task_id: str, agent_id: str = Depends(get_agent_id)):
+def get_task(task_id: str, agent_id: str = Depends(optional_agent_id)):
     conn = get_db()
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     if not row:
@@ -1083,7 +1092,7 @@ def my_task_feed(limit: int = Query(20, le=100), agent_id: str = Depends(get_age
     return {"feed": [dict(r) for r in rows]}
 
 @app.get("/board")
-def board_view(agent_id: str = Depends(get_agent_id)):
+def board_view(agent_id: str = Depends(optional_agent_id)):
     conn = get_db()
     board = {}
     for s in ["open", "claimed", "in_progress", "blocked", "done"]:
@@ -1112,7 +1121,7 @@ def create_project(body: ProjectCreate, agent_id: str = Depends(get_agent_id)):
     return {"ok": True, "project": {"id": pid, "name": body.name}}
 
 @app.get("/projects")
-def list_projects(agent_id: str = Depends(get_agent_id)):
+def list_projects(agent_id: str = Depends(optional_agent_id)):
     conn = get_db()
     rows = conn.execute("""SELECT p.*, (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as task_count,
         (SELECT COUNT(*) FROM tasks WHERE project_id = p.id AND status = 'done') as done_count,
@@ -1169,7 +1178,7 @@ def create_milestone(project_id: str, body: MilestoneCreate, agent_id: str = Dep
     return {"ok": True, "milestone": {"id": mid, "name": body.name}}
 
 @app.get("/projects/{project_id}/milestones")
-def list_milestones(project_id: str, agent_id: str = Depends(get_agent_id)):
+def list_milestones(project_id: str, agent_id: str = Depends(optional_agent_id)):
     conn = get_db()
     rows = conn.execute("SELECT * FROM milestones WHERE project_id = ? ORDER BY due_by ASC NULLS LAST", (project_id,)).fetchall()
     result = []
@@ -1239,7 +1248,7 @@ def create_repo(body: RepoCreate, agent_id: str = Depends(get_agent_id)):
     return {"ok": True, "repo": {"id": rid, "name": body.name}}
 
 @app.get("/git/repos")
-def list_repos(agent_id: str = Depends(get_agent_id)):
+def list_repos(agent_id: str = Depends(optional_agent_id)):
     conn = get_db()
     rows = conn.execute("""SELECT r.*, (SELECT COUNT(*) FROM git_commits WHERE repo_id = r.id) as commit_count,
         (SELECT COUNT(DISTINCT branch) FROM git_commits WHERE repo_id = r.id) as branch_count
@@ -1290,7 +1299,7 @@ def git_commit(repo_name: str, body: GitCommit, agent_id: str = Depends(get_agen
     return {"ok": True, "commit_id": cid, "branch": body.branch, "files_changed": len(body.files)}
 
 @app.get("/git/repos/{repo_name}/log")
-def git_log(repo_name: str, branch: str = "main", limit: int = 50, agent_id: str = Depends(get_agent_id)):
+def git_log(repo_name: str, branch: str = "main", limit: int = 50, agent_id: str = Depends(optional_agent_id)):
     conn = get_db()
     repo = conn.execute("SELECT * FROM git_repos WHERE name = ?", (repo_name,)).fetchone()
     if not repo: conn.close(); raise HTTPException(404, "Repo not found")
@@ -1305,7 +1314,7 @@ def git_log(repo_name: str, branch: str = "main", limit: int = 50, agent_id: str
     return {"commits": result}
 
 @app.get("/git/repos/{repo_name}/tree")
-def git_tree(repo_name: str, branch: str = "main", agent_id: str = Depends(get_agent_id)):
+def git_tree(repo_name: str, branch: str = "main", agent_id: str = Depends(optional_agent_id)):
     """Get the current file tree (latest version of each file on branch)."""
     conn = get_db()
     repo = conn.execute("SELECT * FROM git_repos WHERE name = ?", (repo_name,)).fetchone()
@@ -1326,7 +1335,7 @@ def git_tree(repo_name: str, branch: str = "main", agent_id: str = Depends(get_a
     return {"branch": branch, "files": sorted(tree, key=lambda x: x["path"])}
 
 @app.get("/git/repos/{repo_name}/files/{file_path:path}")
-def git_read_file(repo_name: str, file_path: str, branch: str = "main", agent_id: str = Depends(get_agent_id)):
+def git_read_file(repo_name: str, file_path: str, branch: str = "main", agent_id: str = Depends(optional_agent_id)):
     """Read latest version of a file from a branch."""
     conn = get_db()
     repo = conn.execute("SELECT * FROM git_repos WHERE name = ?", (repo_name,)).fetchone()
@@ -1341,7 +1350,7 @@ def git_read_file(repo_name: str, file_path: str, branch: str = "main", agent_id
     return {"path": file_path, "content": row["content"], "sha256": row["sha256"], "size": row["size"]}
 
 @app.get("/git/repos/{repo_name}/diff/{commit_id}")
-def git_diff(repo_name: str, commit_id: str, agent_id: str = Depends(get_agent_id)):
+def git_diff(repo_name: str, commit_id: str, agent_id: str = Depends(optional_agent_id)):
     """Show diff for a specific commit."""
     conn = get_db()
     commit = conn.execute("SELECT * FROM git_commits WHERE id = ?", (commit_id,)).fetchone()

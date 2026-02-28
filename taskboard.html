@@ -175,9 +175,18 @@
 <script>
 const B=window.location.pathname.includes('/bridge')?window.location.origin+'/bridge':window.location.origin;
 let KEY=localStorage.getItem('tb_key')||'';
-if(!KEY){KEY=prompt('API Key:')||'';if(KEY)localStorage.setItem('tb_key',KEY)}
 
-function api(p,o={}){return fetch(B+p,{...o,headers:{'x-api-key':KEY,'Content-Type':'application/json',...o.headers}}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()})}
+function api(p,o={}){
+  const h={'Content-Type':'application/json',...o.headers};
+  if(KEY)h['x-api-key']=KEY;
+  return fetch(B+p,{...o,headers:h}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json()})
+}
+function needKey(){
+  if(KEY)return true;
+  KEY=prompt('API Key (needed for actions):')||'';
+  if(KEY){localStorage.setItem('tb_key',KEY);return true}
+  return false;
+}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function ago(t){const s=Date.now()/1000-t;if(s<60)return'just now';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago'}
 
@@ -337,6 +346,7 @@ async function showDetail(id){
 }
 
 async function taskAction(id,action){
+  if(!needKey())return;
   await api('/tasks/'+id+'/'+action,{method:'POST'});
   closeDetail();loadAll();
 }
@@ -366,6 +376,7 @@ function closeNew(){document.getElementById('newModal').classList.remove('show')
 function closeDetail(){document.getElementById('detailModal').classList.remove('show')}
 
 async function createTask(){
+  if(!needKey())return;
   const tags=document.getElementById('nt-tags').value.split(',').map(s=>s.trim()).filter(Boolean);
   await api('/tasks',{method:'POST',body:JSON.stringify({
     title:document.getElementById('nt-title').value,
