@@ -1,10 +1,10 @@
-"""Agent Bridge v4 — Multi-agent conversation broker with file sharing + task board"""
+"""Agent Bridge v5 — Multi-agent collaboration platform: messaging, files, projects, tasks, git"""
 from fastapi import FastAPI, HTTPException, Header, Depends, Request, Response, UploadFile, File, Form, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
-import sqlite3, os, secrets, time, uuid, json, hashlib, mimetypes, shutil
+import sqlite3, os, secrets, time, uuid, json, hashlib, mimetypes, shutil, difflib
 
 # ── Rate limiting note ────────────────────────────────────────────────────────
 # TODO: Add rate limiting middleware if abuse becomes an issue.
@@ -13,10 +13,13 @@ import sqlite3, os, secrets, time, uuid, json, hashlib, mimetypes, shutil
 # For uploads specifically: 10/min to prevent disk exhaustion attacks.
 # ──────────────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Agent Bridge v4")
+app = FastAPI(title="Agent Bridge v5")
 
 SERVER_START_TIME = time.time()
-VERSION = "4.0.0"
+VERSION = "5.0.0"
+
+REPOS_DIR = os.path.join(os.path.dirname(__file__), "repos")
+os.makedirs(REPOS_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "messages.db")
 FILES_DIR = os.path.join(os.path.dirname(__file__), "files")
@@ -59,14 +62,41 @@ def init_db():
         conversation_id TEXT, message_id TEXT,
         description TEXT
     )""")
-    # Task board tables
+    # Projects
+    conn.execute("""CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT DEFAULT '',
+        status TEXT DEFAULT 'active', created_by TEXT NOT NULL,
+        created_at REAL NOT NULL, updated_at REAL NOT NULL,
+        tags TEXT DEFAULT '[]'
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS project_members (
+        project_id TEXT NOT NULL, agent_id TEXT NOT NULL, role TEXT DEFAULT 'member',
+        joined_at REAL NOT NULL, PRIMARY KEY (project_id, agent_id)
+    )""")
+    # Milestones
+    conn.execute("""CREATE TABLE IF NOT EXISTS milestones (
+        id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
+        description TEXT DEFAULT '', due_by REAL, status TEXT DEFAULT 'open',
+        created_at REAL NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id)
+    )""")
+    # Tasks with project + milestone + dependencies
     conn.execute("""CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT DEFAULT '',
         status TEXT DEFAULT 'open', priority TEXT DEFAULT 'normal',
         created_by TEXT NOT NULL, assigned_to TEXT, claimed_by TEXT,
         tags TEXT DEFAULT '[]', created_at REAL NOT NULL, updated_at REAL NOT NULL,
         completed_at REAL, due_by REAL, parent_id TEXT,
-        FOREIGN KEY (parent_id) REFERENCES tasks(id)
+        project_id TEXT, milestone_id TEXT, effort_estimate TEXT,
+        FOREIGN KEY (parent_id) REFERENCES tasks(id),
+        FOREIGN KEY (project_id) REFERENCES projects(id),
+        FOREIGN KEY (milestone_id) REFERENCES milestones(id)
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS task_dependencies (
+        task_id TEXT NOT NULL, depends_on TEXT NOT NULL,
+        PRIMARY KEY (task_id, depends_on),
+        FOREIGN KEY (task_id) REFERENCES tasks(id),
+        FOREIGN KEY (depends_on) REFERENCES tasks(id)
     )""")
     conn.execute("""CREATE TABLE IF NOT EXISTS task_comments (
         id TEXT PRIMARY KEY, task_id TEXT NOT NULL, agent_name TEXT NOT NULL,
@@ -77,6 +107,30 @@ def init_db():
         id TEXT PRIMARY KEY, task_id TEXT NOT NULL, agent_name TEXT NOT NULL,
         action TEXT NOT NULL, details TEXT DEFAULT '', created_at REAL NOT NULL,
         FOREIGN KEY (task_id) REFERENCES tasks(id)
+    )""")
+    # Agent Git — shared repositories
+    conn.execute("""CREATE TABLE IF NOT EXISTS git_repos (
+        id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, description TEXT DEFAULT '',
+        created_by TEXT NOT NULL, created_at REAL NOT NULL,
+        default_branch TEXT DEFAULT 'main', project_id TEXT,
+        FOREIGN KEY (project_id) REFERENCES projects(id)
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS git_commits (
+        id TEXT PRIMARY KEY, repo_id TEXT NOT NULL, branch TEXT DEFAULT 'main',
+        author TEXT NOT NULL, message TEXT NOT NULL, created_at REAL NOT NULL,
+        parent_id TEXT,
+        FOREIGN KEY (repo_id) REFERENCES git_repos(id)
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS git_files (
+        id TEXT PRIMARY KEY, commit_id TEXT NOT NULL, path TEXT NOT NULL,
+        content TEXT, sha256 TEXT, size INTEGER DEFAULT 0,
+        action TEXT DEFAULT 'add',
+        FOREIGN KEY (commit_id) REFERENCES git_commits(id)
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS git_branches (
+        repo_id TEXT NOT NULL, name TEXT NOT NULL, head_commit TEXT,
+        PRIMARY KEY (repo_id, name),
+        FOREIGN KEY (repo_id) REFERENCES git_repos(id)
     )""")
     tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
     if "messages" not in tables:
@@ -182,6 +236,10 @@ class TaskCreate(BaseModel):
     tags: List[str] = []
     due_by: Optional[str] = None
     parent_id: Optional[str] = None
+    project_id: Optional[str] = None
+    milestone_id: Optional[str] = None
+    effort_estimate: Optional[str] = None
+    depends_on: List[str] = []
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
@@ -194,6 +252,32 @@ class TaskUpdate(BaseModel):
 
 class TaskCommentCreate(BaseModel):
     content: str
+
+# Project models
+class ProjectCreate(BaseModel):
+    name: str
+    description: str = ""
+    tags: List[str] = []
+    members: List[str] = []
+
+class MilestoneCreate(BaseModel):
+    name: str
+    description: str = ""
+    due_by: Optional[str] = None
+
+# Git models
+class RepoCreate(BaseModel):
+    name: str
+    description: str = ""
+    project_id: Optional[str] = None
+
+class GitCommit(BaseModel):
+    message: str
+    branch: str = "main"
+    files: List[dict] = []  # [{path, content, action}]
+
+class DependencyAdd(BaseModel):
+    depends_on: str
 
 # ── Helpers ──────────────────────────────────────────
 
@@ -818,11 +902,16 @@ def create_task(body: TaskCreate, agent_id: str = Depends(get_agent_id)):
             conn.close()
             raise HTTPException(404, "Parent task not found")
     conn.execute(
-        """INSERT INTO tasks (id, title, description, status, priority, created_by, assigned_to, tags, created_at, updated_at, due_by, parent_id)
-           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT INTO tasks (id, title, description, status, priority, created_by, assigned_to, tags, created_at, updated_at, due_by, parent_id, project_id, milestone_id, effort_estimate)
+           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (task_id, body.title, body.description, body.priority, agent_id,
-         body.assigned_to, json.dumps(body.tags), now, now, due_by, body.parent_id)
+         body.assigned_to, json.dumps(body.tags), now, now, due_by, body.parent_id,
+         body.project_id, body.milestone_id, body.effort_estimate)
     )
+    # Add dependencies
+    for dep_id in body.depends_on:
+        if conn.execute("SELECT 1 FROM tasks WHERE id = ?", (dep_id,)).fetchone():
+            conn.execute("INSERT OR IGNORE INTO task_dependencies (task_id, depends_on) VALUES (?,?)", (task_id, dep_id))
     _add_task_history(conn, task_id, agent_id, "created", f"Created task: {body.title}")
     conn.commit()
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -1002,6 +1091,280 @@ def board_view(agent_id: str = Depends(get_agent_id)):
         board[s] = [_task_to_dict(r) for r in rows]
     conn.close()
     return {"board": board}
+
+# ── Projects ──────────────────────────────────────────
+
+@app.post("/projects")
+def create_project(body: ProjectCreate, agent_id: str = Depends(get_agent_id)):
+    pid = str(uuid.uuid4())
+    now = time.time()
+    conn = get_db()
+    conn.execute("INSERT INTO projects (id, name, description, created_by, created_at, updated_at, tags) VALUES (?,?,?,?,?,?,?)",
+                 (pid, body.name, body.description, agent_id, now, now, json.dumps(body.tags)))
+    conn.execute("INSERT INTO project_members (project_id, agent_id, role, joined_at) VALUES (?,?,?,?)",
+                 (pid, agent_id, "owner", now))
+    for m in body.members:
+        if m != agent_id:
+            conn.execute("INSERT OR IGNORE INTO project_members (project_id, agent_id, role, joined_at) VALUES (?,?,?,?)",
+                         (pid, m, "member", now))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "project": {"id": pid, "name": body.name}}
+
+@app.get("/projects")
+def list_projects(agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    rows = conn.execute("""SELECT p.*, (SELECT COUNT(*) FROM tasks WHERE project_id = p.id) as task_count,
+        (SELECT COUNT(*) FROM tasks WHERE project_id = p.id AND status = 'done') as done_count,
+        (SELECT COUNT(*) FROM project_members WHERE project_id = p.id) as member_count
+        FROM projects p ORDER BY p.updated_at DESC""").fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["tags"] = json.loads(d.get("tags", "[]"))
+        d["progress_pct"] = round(d["done_count"] / d["task_count"] * 100) if d["task_count"] > 0 else 0
+        result.append(d)
+    return {"projects": result}
+
+@app.get("/projects/{project_id}")
+def get_project(project_id: str, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    proj = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    if not proj: conn.close(); raise HTTPException(404, "Project not found")
+    members = [dict(m) for m in conn.execute("SELECT * FROM project_members WHERE project_id = ?", (project_id,)).fetchall()]
+    tasks = [_task_to_dict(t) for t in conn.execute("SELECT * FROM tasks WHERE project_id = ? ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 END", (project_id,)).fetchall()]
+    milestones = [dict(m) for m in conn.execute("SELECT * FROM milestones WHERE project_id = ? ORDER BY due_by ASC NULLS LAST", (project_id,)).fetchall()]
+    repos = [dict(r) for r in conn.execute("SELECT * FROM git_repos WHERE project_id = ?", (project_id,)).fetchall()]
+    conn.close()
+    d = dict(proj)
+    d["tags"] = json.loads(d.get("tags", "[]"))
+    return {"project": d, "members": members, "tasks": tasks, "milestones": milestones, "repos": repos}
+
+@app.post("/projects/{project_id}/members")
+def add_project_member(project_id: str, body: dict, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    if not conn.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchone():
+        conn.close(); raise HTTPException(404, "Project not found")
+    conn.execute("INSERT OR IGNORE INTO project_members (project_id, agent_id, role, joined_at) VALUES (?,?,?,?)",
+                 (project_id, body.get("agent_id", ""), "member", time.time()))
+    conn.commit(); conn.close()
+    return {"ok": True}
+
+# ── Milestones ────────────────────────────────────────
+
+@app.post("/projects/{project_id}/milestones")
+def create_milestone(project_id: str, body: MilestoneCreate, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    if not conn.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchone():
+        conn.close(); raise HTTPException(404, "Project not found")
+    mid = str(uuid.uuid4())
+    due = None
+    if body.due_by:
+        try: due = datetime.fromisoformat(body.due_by).timestamp()
+        except ValueError: raise HTTPException(400, "Invalid due_by")
+    conn.execute("INSERT INTO milestones (id, project_id, name, description, due_by, status, created_at) VALUES (?,?,?,?,?,?,?)",
+                 (mid, project_id, body.name, body.description, due, "open", time.time()))
+    conn.commit(); conn.close()
+    return {"ok": True, "milestone": {"id": mid, "name": body.name}}
+
+@app.get("/projects/{project_id}/milestones")
+def list_milestones(project_id: str, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM milestones WHERE project_id = ? ORDER BY due_by ASC NULLS LAST", (project_id,)).fetchall()
+    result = []
+    for m in rows:
+        d = dict(m)
+        task_count = conn.execute("SELECT COUNT(*) FROM tasks WHERE milestone_id = ?", (m["id"],)).fetchone()[0]
+        done_count = conn.execute("SELECT COUNT(*) FROM tasks WHERE milestone_id = ? AND status = 'done'", (m["id"],)).fetchone()[0]
+        d["task_count"] = task_count
+        d["done_count"] = done_count
+        d["progress_pct"] = round(done_count / task_count * 100) if task_count > 0 else 0
+        result.append(d)
+    conn.close()
+    return {"milestones": result}
+
+# ── Task Dependencies ─────────────────────────────────
+
+@app.post("/tasks/{task_id}/dependencies")
+def add_dependency(task_id: str, body: DependencyAdd, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    if not conn.execute("SELECT 1 FROM tasks WHERE id = ?", (task_id,)).fetchone():
+        conn.close(); raise HTTPException(404, "Task not found")
+    if not conn.execute("SELECT 1 FROM tasks WHERE id = ?", (body.depends_on,)).fetchone():
+        conn.close(); raise HTTPException(404, "Dependency task not found")
+    if task_id == body.depends_on:
+        conn.close(); raise HTTPException(400, "Task cannot depend on itself")
+    try:
+        conn.execute("INSERT INTO task_dependencies (task_id, depends_on) VALUES (?,?)", (task_id, body.depends_on))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close(); raise HTTPException(409, "Dependency already exists")
+    _add_task_history(conn, task_id, agent_id, "dependency_added", f"Now depends on {body.depends_on}")
+    conn.commit(); conn.close()
+    return {"ok": True}
+
+@app.get("/tasks/{task_id}/dependencies")
+def get_dependencies(task_id: str, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    deps = conn.execute("""SELECT t.* FROM tasks t JOIN task_dependencies d ON t.id = d.depends_on
+        WHERE d.task_id = ?""", (task_id,)).fetchall()
+    blockers = [_task_to_dict(d) for d in deps]
+    unmet = [b for b in blockers if b["status"] != "done"]
+    dependents = conn.execute("""SELECT t.* FROM tasks t JOIN task_dependencies d ON t.id = d.task_id
+        WHERE d.depends_on = ?""", (task_id,)).fetchall()
+    conn.close()
+    return {"depends_on": blockers, "unmet_blockers": len(unmet), "blocks": [_task_to_dict(d) for d in dependents]}
+
+@app.delete("/tasks/{task_id}/dependencies/{dep_id}")
+def remove_dependency(task_id: str, dep_id: str, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    conn.execute("DELETE FROM task_dependencies WHERE task_id = ? AND depends_on = ?", (task_id, dep_id))
+    _add_task_history(conn, task_id, agent_id, "dependency_removed", f"No longer depends on {dep_id}")
+    conn.commit(); conn.close()
+    return {"ok": True}
+
+# ── Agent Git ─────────────────────────────────────────
+
+@app.post("/git/repos")
+def create_repo(body: RepoCreate, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    if conn.execute("SELECT 1 FROM git_repos WHERE name = ?", (body.name,)).fetchone():
+        conn.close(); raise HTTPException(409, f"Repo '{body.name}' already exists")
+    rid = str(uuid.uuid4())
+    conn.execute("INSERT INTO git_repos (id, name, description, created_by, created_at, project_id) VALUES (?,?,?,?,?,?)",
+                 (rid, body.name, body.description, agent_id, time.time(), body.project_id))
+    conn.execute("INSERT INTO git_branches (repo_id, name, head_commit) VALUES (?,?,?)", (rid, "main", None))
+    conn.commit(); conn.close()
+    return {"ok": True, "repo": {"id": rid, "name": body.name}}
+
+@app.get("/git/repos")
+def list_repos(agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    rows = conn.execute("""SELECT r.*, (SELECT COUNT(*) FROM git_commits WHERE repo_id = r.id) as commit_count,
+        (SELECT COUNT(DISTINCT branch) FROM git_commits WHERE repo_id = r.id) as branch_count
+        FROM git_repos r ORDER BY r.created_at DESC""").fetchall()
+    conn.close()
+    return {"repos": [dict(r) for r in rows]}
+
+@app.get("/git/repos/{repo_name}")
+def get_repo(repo_name: str, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    repo = conn.execute("SELECT * FROM git_repos WHERE name = ?", (repo_name,)).fetchone()
+    if not repo: conn.close(); raise HTTPException(404, "Repo not found")
+    branches = [dict(b) for b in conn.execute("SELECT * FROM git_branches WHERE repo_id = ?", (repo["id"],)).fetchall()]
+    recent = [dict(c) for c in conn.execute("SELECT * FROM git_commits WHERE repo_id = ? ORDER BY created_at DESC LIMIT 20", (repo["id"],)).fetchall()]
+    conn.close()
+    return {"repo": dict(repo), "branches": branches, "recent_commits": recent}
+
+@app.post("/git/repos/{repo_name}/commit")
+def git_commit(repo_name: str, body: GitCommit, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    repo = conn.execute("SELECT * FROM git_repos WHERE name = ?", (repo_name,)).fetchone()
+    if not repo: conn.close(); raise HTTPException(404, "Repo not found")
+    if not body.files: conn.close(); raise HTTPException(400, "No files in commit")
+
+    rid = repo["id"]
+    branch_row = conn.execute("SELECT * FROM git_branches WHERE repo_id = ? AND name = ?", (rid, body.branch)).fetchone()
+    if not branch_row:
+        conn.execute("INSERT INTO git_branches (repo_id, name, head_commit) VALUES (?,?,?)", (rid, body.branch, None))
+        parent_id = None
+    else:
+        parent_id = branch_row["head_commit"]
+
+    cid = str(uuid.uuid4())
+    conn.execute("INSERT INTO git_commits (id, repo_id, branch, author, message, created_at, parent_id) VALUES (?,?,?,?,?,?,?)",
+                 (cid, rid, body.branch, agent_id, body.message, time.time(), parent_id))
+
+    for f in body.files:
+        path = f.get("path", "")
+        content = f.get("content", "")
+        action = f.get("action", "add")  # add, modify, delete
+        sha = hashlib.sha256(content.encode()).hexdigest() if content else ""
+        fid = str(uuid.uuid4())
+        conn.execute("INSERT INTO git_files (id, commit_id, path, content, sha256, size, action) VALUES (?,?,?,?,?,?,?)",
+                     (fid, cid, path, content, sha, len(content.encode()), action))
+
+    conn.execute("UPDATE git_branches SET head_commit = ? WHERE repo_id = ? AND name = ?", (cid, rid, body.branch))
+    conn.commit(); conn.close()
+    return {"ok": True, "commit_id": cid, "branch": body.branch, "files_changed": len(body.files)}
+
+@app.get("/git/repos/{repo_name}/log")
+def git_log(repo_name: str, branch: str = "main", limit: int = 50, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    repo = conn.execute("SELECT * FROM git_repos WHERE name = ?", (repo_name,)).fetchone()
+    if not repo: conn.close(); raise HTTPException(404, "Repo not found")
+    commits = conn.execute("SELECT * FROM git_commits WHERE repo_id = ? AND branch = ? ORDER BY created_at DESC LIMIT ?",
+                           (repo["id"], branch, limit)).fetchall()
+    result = []
+    for c in commits:
+        d = dict(c)
+        d["files"] = [dict(f) for f in conn.execute("SELECT id, path, action, size, sha256 FROM git_files WHERE commit_id = ?", (c["id"],)).fetchall()]
+        result.append(d)
+    conn.close()
+    return {"commits": result}
+
+@app.get("/git/repos/{repo_name}/tree")
+def git_tree(repo_name: str, branch: str = "main", agent_id: str = Depends(get_agent_id)):
+    """Get the current file tree (latest version of each file on branch)."""
+    conn = get_db()
+    repo = conn.execute("SELECT * FROM git_repos WHERE name = ?", (repo_name,)).fetchone()
+    if not repo: conn.close(); raise HTTPException(404, "Repo not found")
+    # Walk commits from newest to oldest, build file map
+    commits = conn.execute("SELECT id FROM git_commits WHERE repo_id = ? AND branch = ? ORDER BY created_at DESC",
+                           (repo["id"], branch)).fetchall()
+    file_map = {}  # path -> {content, sha256, size, commit_id, action}
+    for c in commits:
+        files = conn.execute("SELECT * FROM git_files WHERE commit_id = ?", (c["id"],)).fetchall()
+        for f in files:
+            if f["path"] not in file_map:
+                file_map[f["path"]] = {"path": f["path"], "sha256": f["sha256"], "size": f["size"],
+                                        "action": f["action"], "commit_id": c["id"]}
+    conn.close()
+    # Filter out deleted files
+    tree = [v for v in file_map.values() if v["action"] != "delete"]
+    return {"branch": branch, "files": sorted(tree, key=lambda x: x["path"])}
+
+@app.get("/git/repos/{repo_name}/files/{file_path:path}")
+def git_read_file(repo_name: str, file_path: str, branch: str = "main", agent_id: str = Depends(get_agent_id)):
+    """Read latest version of a file from a branch."""
+    conn = get_db()
+    repo = conn.execute("SELECT * FROM git_repos WHERE name = ?", (repo_name,)).fetchone()
+    if not repo: conn.close(); raise HTTPException(404, "Repo not found")
+    row = conn.execute("""SELECT gf.* FROM git_files gf
+        JOIN git_commits gc ON gf.commit_id = gc.id
+        WHERE gc.repo_id = ? AND gc.branch = ? AND gf.path = ?
+        ORDER BY gc.created_at DESC LIMIT 1""", (repo["id"], branch, file_path)).fetchone()
+    conn.close()
+    if not row or row["action"] == "delete":
+        raise HTTPException(404, "File not found")
+    return {"path": file_path, "content": row["content"], "sha256": row["sha256"], "size": row["size"]}
+
+@app.get("/git/repos/{repo_name}/diff/{commit_id}")
+def git_diff(repo_name: str, commit_id: str, agent_id: str = Depends(get_agent_id)):
+    """Show diff for a specific commit."""
+    conn = get_db()
+    commit = conn.execute("SELECT * FROM git_commits WHERE id = ?", (commit_id,)).fetchone()
+    if not commit: conn.close(); raise HTTPException(404, "Commit not found")
+    files = conn.execute("SELECT * FROM git_files WHERE commit_id = ?", (commit_id,)).fetchall()
+    diffs = []
+    for f in files:
+        if commit["parent_id"] and f["action"] == "modify":
+            old = conn.execute("""SELECT gf.content FROM git_files gf
+                JOIN git_commits gc ON gf.commit_id = gc.id
+                WHERE gc.repo_id = ? AND gc.branch = ? AND gf.path = ? AND gc.created_at < ?
+                ORDER BY gc.created_at DESC LIMIT 1""",
+                (commit["repo_id"], commit["branch"], f["path"], commit["created_at"])).fetchone()
+            old_content = (old["content"] if old else "").splitlines(keepends=True)
+            new_content = (f["content"] or "").splitlines(keepends=True)
+            diff_text = "".join(difflib.unified_diff(old_content, new_content, fromfile=f"a/{f['path']}", tofile=f"b/{f['path']}"))
+        elif f["action"] == "delete":
+            diff_text = f"--- a/{f['path']}\n+++ /dev/null\n(file deleted)"
+        else:
+            diff_text = f"--- /dev/null\n+++ b/{f['path']}\n(new file, {f['size']} bytes)"
+        diffs.append({"path": f["path"], "action": f["action"], "diff": diff_text})
+    conn.close()
+    return {"commit": dict(commit), "diffs": diffs}
 
 @app.get("/board/web")
 def task_board_web():
