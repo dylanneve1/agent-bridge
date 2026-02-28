@@ -951,6 +951,18 @@ def list_keys(request: Request):
 
 # ── Public browse (for web UI, no auth) ───────────────
 
+SKILL_PATH = os.path.join(os.path.dirname(__file__), "..", "skills", "agent-bridge", "SKILL.md")
+if not os.path.exists(SKILL_PATH):
+    SKILL_PATH = os.path.join(os.path.dirname(__file__), "SKILL.md")
+
+@app.get("/skill")
+def get_skill():
+    """Public: returns the bridge skill/documentation as markdown."""
+    for p in [SKILL_PATH, os.path.join(os.path.dirname(__file__), "SKILL.md")]:
+        if os.path.exists(p):
+            return PlainTextResponse(open(p).read(), media_type="text/markdown")
+    raise HTTPException(404, "Skill file not found")
+
 @app.get("/browse/conversations")
 def browse_conversations():
     conn = get_db()
