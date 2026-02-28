@@ -8,6 +8,7 @@ Polls the bridge API for unread messages.
 This prevents flywheel effects when two agents both have auto-reply.
 """
 
+import os
 import sys
 import time
 import json
@@ -15,6 +16,9 @@ import logging
 import subprocess
 import urllib.request
 import urllib.error
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
 
 logging.basicConfig(
     level=logging.INFO,
