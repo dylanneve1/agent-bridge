@@ -1,8 +1,9 @@
-"""Agent Bridge v3 — Multi-agent conversation broker with file sharing"""
-from fastapi import FastAPI, HTTPException, Header, Depends, Request, Response, UploadFile, File, Form
+"""Agent Bridge v4 — Multi-agent conversation broker with file sharing + task board"""
+from fastapi import FastAPI, HTTPException, Header, Depends, Request, Response, UploadFile, File, Form, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
+from datetime import datetime, timezone
 import sqlite3, os, secrets, time, uuid, json, hashlib, mimetypes, shutil
 
 # ── Rate limiting note ────────────────────────────────────────────────────────
@@ -12,10 +13,10 @@ import sqlite3, os, secrets, time, uuid, json, hashlib, mimetypes, shutil
 # For uploads specifically: 10/min to prevent disk exhaustion attacks.
 # ──────────────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Agent Bridge v3")
+app = FastAPI(title="Agent Bridge v4")
 
 SERVER_START_TIME = time.time()
-VERSION = "3.0.0"
+VERSION = "4.0.0"
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "messages.db")
 FILES_DIR = os.path.join(os.path.dirname(__file__), "files")
@@ -57,6 +58,25 @@ def init_db():
         uploaded_by TEXT NOT NULL, uploaded_at REAL NOT NULL,
         conversation_id TEXT, message_id TEXT,
         description TEXT
+    )""")
+    # Task board tables
+    conn.execute("""CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT DEFAULT '',
+        status TEXT DEFAULT 'open', priority TEXT DEFAULT 'normal',
+        created_by TEXT NOT NULL, assigned_to TEXT, claimed_by TEXT,
+        tags TEXT DEFAULT '[]', created_at REAL NOT NULL, updated_at REAL NOT NULL,
+        completed_at REAL, due_by REAL, parent_id TEXT,
+        FOREIGN KEY (parent_id) REFERENCES tasks(id)
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS task_comments (
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL, agent_name TEXT NOT NULL,
+        content TEXT NOT NULL, created_at REAL NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES tasks(id)
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS task_history (
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL, agent_name TEXT NOT NULL,
+        action TEXT NOT NULL, details TEXT DEFAULT '', created_at REAL NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES tasks(id)
     )""")
     tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
     if "messages" not in tables:
@@ -153,6 +173,28 @@ class RegisterReq(BaseModel):
     agent_id: str
     admin_secret: str
 
+# Task board models
+class TaskCreate(BaseModel):
+    title: str
+    description: str = ""
+    priority: str = "normal"
+    assigned_to: Optional[str] = None
+    tags: List[str] = []
+    due_by: Optional[str] = None
+    parent_id: Optional[str] = None
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    priority: Optional[str] = None
+    assigned_to: Optional[str] = None
+    tags: Optional[List[str]] = None
+    status: Optional[str] = None
+    due_by: Optional[str] = None
+
+class TaskCommentCreate(BaseModel):
+    content: str
+
 # ── Helpers ──────────────────────────────────────────
 
 def get_files_stats_data():
@@ -215,11 +257,17 @@ def server_status():
     unread_msgs = conn.execute("SELECT COUNT(*) as c FROM messages WHERE read = 0").fetchone()["c"]
     agent_count = conn.execute("SELECT COUNT(*) as c FROM api_keys").fetchone()["c"]
     conv_count = conn.execute("SELECT COUNT(*) as c FROM conversations").fetchone()["c"]
-    conn.close()
 
     uptime_secs = time.time() - SERVER_START_TIME
     uptime_h = int(uptime_secs // 3600)
     uptime_m = int((uptime_secs % 3600) // 60)
+
+    # Task stats
+    task_total = conn.execute("SELECT COUNT(*) as c FROM tasks").fetchone()["c"]
+    task_open = conn.execute("SELECT COUNT(*) as c FROM tasks WHERE status = 'open'").fetchone()["c"]
+    task_in_progress = conn.execute("SELECT COUNT(*) as c FROM tasks WHERE status = 'in_progress'").fetchone()["c"]
+    task_done = conn.execute("SELECT COUNT(*) as c FROM tasks WHERE status = 'done'").fetchone()["c"]
+    conn.close()
 
     return {
         "ok": True,
@@ -234,6 +282,12 @@ def server_status():
         "conversations": conv_count,
         "agents_registered": agent_count,
         "files": get_files_stats_data(),
+        "tasks": {
+            "total": task_total,
+            "open": task_open,
+            "in_progress": task_in_progress,
+            "done": task_done,
+        },
     }
 
 # ── Conversations API (authenticated) ────────────────
@@ -732,6 +786,231 @@ def watcher_state():
         except Exception:
             return {}
     return {}
+
+# ── Task Board ─────────────────────────────────────────
+
+def _add_task_history(conn, task_id, agent_name, action, details=""):
+    conn.execute(
+        "INSERT INTO task_history (id, task_id, agent_name, action, details, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), task_id, agent_name, action, details, time.time())
+    )
+
+def _task_to_dict(row):
+    d = dict(row)
+    d["tags"] = json.loads(d.get("tags", "[]"))
+    return d
+
+@app.post("/tasks")
+def create_task(body: TaskCreate, agent_id: str = Depends(get_agent_id)):
+    task_id = str(uuid.uuid4())
+    now = time.time()
+    if body.priority not in ("low", "normal", "high", "urgent"):
+        raise HTTPException(400, "Priority must be: low, normal, high, urgent")
+    due_by = None
+    if body.due_by:
+        try:
+            due_by = datetime.fromisoformat(body.due_by).timestamp()
+        except ValueError:
+            raise HTTPException(400, "Invalid due_by format. Use ISO 8601.")
+    conn = get_db()
+    if body.parent_id:
+        if not conn.execute("SELECT id FROM tasks WHERE id = ?", (body.parent_id,)).fetchone():
+            conn.close()
+            raise HTTPException(404, "Parent task not found")
+    conn.execute(
+        """INSERT INTO tasks (id, title, description, status, priority, created_by, assigned_to, tags, created_at, updated_at, due_by, parent_id)
+           VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (task_id, body.title, body.description, body.priority, agent_id,
+         body.assigned_to, json.dumps(body.tags), now, now, due_by, body.parent_id)
+    )
+    _add_task_history(conn, task_id, agent_id, "created", f"Created task: {body.title}")
+    conn.commit()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return {"ok": True, "task": _task_to_dict(row)}
+
+@app.get("/tasks")
+def list_tasks(
+    status: Optional[str] = None, assigned_to: Optional[str] = None,
+    created_by: Optional[str] = None, priority: Optional[str] = None,
+    tag: Optional[str] = None, limit: int = Query(50, le=200),
+    agent_id: str = Depends(get_agent_id)
+):
+    conn = get_db()
+    query = "SELECT * FROM tasks WHERE 1=1"
+    params = []
+    if status:
+        query += " AND status = ?"; params.append(status)
+    if assigned_to:
+        query += " AND (assigned_to = ? OR claimed_by = ?)"; params.extend([assigned_to, assigned_to])
+    if created_by:
+        query += " AND created_by = ?"; params.append(created_by)
+    if priority:
+        query += " AND priority = ?"; params.append(priority)
+    query += " ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 END, updated_at DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    tasks = [_task_to_dict(r) for r in rows]
+    if tag:
+        tasks = [t for t in tasks if tag in t.get("tags", [])]
+    return {"tasks": tasks, "count": len(tasks)}
+
+@app.get("/tasks/{task_id}")
+def get_task(task_id: str, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if not row:
+        conn.close(); raise HTTPException(404, "Task not found")
+    comments = conn.execute("SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at ASC", (task_id,)).fetchall()
+    history = conn.execute("SELECT * FROM task_history WHERE task_id = ? ORDER BY created_at ASC", (task_id,)).fetchall()
+    subtasks = conn.execute("SELECT * FROM tasks WHERE parent_id = ? ORDER BY created_at ASC", (task_id,)).fetchall()
+    conn.close()
+    return {"task": _task_to_dict(row), "comments": [dict(c) for c in comments],
+            "history": [dict(h) for h in history], "subtasks": [_task_to_dict(s) for s in subtasks]}
+
+@app.patch("/tasks/{task_id}")
+def update_task(task_id: str, body: TaskUpdate, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if not row:
+        conn.close(); raise HTTPException(404, "Task not found")
+    updates, params, changes = [], [], []
+    if body.title is not None:
+        updates.append("title = ?"); params.append(body.title); changes.append(f"title → '{body.title}'")
+    if body.description is not None:
+        updates.append("description = ?"); params.append(body.description); changes.append("description updated")
+    if body.priority is not None:
+        if body.priority not in ("low", "normal", "high", "urgent"):
+            conn.close(); raise HTTPException(400, "Invalid priority")
+        updates.append("priority = ?"); params.append(body.priority); changes.append(f"priority → {body.priority}")
+    if body.assigned_to is not None:
+        updates.append("assigned_to = ?"); params.append(body.assigned_to); changes.append(f"assigned to {body.assigned_to}")
+    if body.tags is not None:
+        updates.append("tags = ?"); params.append(json.dumps(body.tags)); changes.append(f"tags → {body.tags}")
+    if body.status is not None:
+        valid = ("open", "claimed", "in_progress", "done", "blocked", "cancelled")
+        if body.status not in valid:
+            conn.close(); raise HTTPException(400, f"Status must be one of: {', '.join(valid)}")
+        updates.append("status = ?"); params.append(body.status); changes.append(f"status → {body.status}")
+        if body.status == "done":
+            updates.append("completed_at = ?"); params.append(time.time())
+    if body.due_by is not None:
+        try:
+            updates.append("due_by = ?"); params.append(datetime.fromisoformat(body.due_by).timestamp()); changes.append(f"due by {body.due_by}")
+        except ValueError:
+            conn.close(); raise HTTPException(400, "Invalid due_by format")
+    if not updates:
+        conn.close(); raise HTTPException(400, "No updates provided")
+    updates.append("updated_at = ?"); params.append(time.time()); params.append(task_id)
+    conn.execute(f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?", params)
+    _add_task_history(conn, task_id, agent_id, "updated", "; ".join(changes))
+    conn.commit()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return {"ok": True, "task": _task_to_dict(row)}
+
+@app.post("/tasks/{task_id}/claim")
+def claim_task(task_id: str, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if not row: conn.close(); raise HTTPException(404, "Task not found")
+    if row["status"] != "open": conn.close(); raise HTTPException(400, f"Cannot claim task with status '{row['status']}'")
+    conn.execute("UPDATE tasks SET status = 'claimed', claimed_by = ?, updated_at = ? WHERE id = ?", (agent_id, time.time(), task_id))
+    _add_task_history(conn, task_id, agent_id, "claimed", f"{agent_id} claimed this task")
+    conn.commit()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return {"ok": True, "task": _task_to_dict(row)}
+
+@app.post("/tasks/{task_id}/start")
+def start_task(task_id: str, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if not row: conn.close(); raise HTTPException(404, "Task not found")
+    if row["status"] not in ("open", "claimed"): conn.close(); raise HTTPException(400, f"Cannot start task with status '{row['status']}'")
+    conn.execute("UPDATE tasks SET status = 'in_progress', claimed_by = COALESCE(claimed_by, ?), updated_at = ? WHERE id = ?", (agent_id, time.time(), task_id))
+    _add_task_history(conn, task_id, agent_id, "started", f"{agent_id} started working")
+    conn.commit()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return {"ok": True, "task": _task_to_dict(row)}
+
+@app.post("/tasks/{task_id}/complete")
+def complete_task(task_id: str, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if not row: conn.close(); raise HTTPException(404, "Task not found")
+    if row["status"] in ("done", "cancelled"): conn.close(); raise HTTPException(400, f"Task already {row['status']}")
+    now = time.time()
+    conn.execute("UPDATE tasks SET status = 'done', completed_at = ?, updated_at = ? WHERE id = ?", (now, now, task_id))
+    _add_task_history(conn, task_id, agent_id, "completed", f"{agent_id} completed this task")
+    conn.commit()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return {"ok": True, "task": _task_to_dict(row)}
+
+@app.post("/tasks/{task_id}/block")
+def block_task(task_id: str, body: TaskCommentCreate, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if not row: conn.close(); raise HTTPException(404, "Task not found")
+    conn.execute("UPDATE tasks SET status = 'blocked', updated_at = ? WHERE id = ?", (time.time(), task_id))
+    _add_task_history(conn, task_id, agent_id, "blocked", body.content)
+    conn.execute("INSERT INTO task_comments (id, task_id, agent_name, content, created_at) VALUES (?, ?, ?, ?, ?)",
+                 (str(uuid.uuid4()), task_id, agent_id, f"🚫 Blocked: {body.content}", time.time()))
+    conn.commit()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return {"ok": True, "task": _task_to_dict(row)}
+
+@app.post("/tasks/{task_id}/comments")
+def add_task_comment(task_id: str, body: TaskCommentCreate, agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    if not conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone():
+        conn.close(); raise HTTPException(404, "Task not found")
+    comment_id = str(uuid.uuid4())
+    conn.execute("INSERT INTO task_comments (id, task_id, agent_name, content, created_at) VALUES (?, ?, ?, ?, ?)",
+                 (comment_id, task_id, agent_id, body.content, time.time()))
+    conn.execute("UPDATE tasks SET updated_at = ? WHERE id = ?", (time.time(), task_id))
+    conn.commit(); conn.close()
+    return {"ok": True, "comment_id": comment_id}
+
+@app.get("/tasks/my/active")
+def my_tasks(agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    created = conn.execute("SELECT * FROM tasks WHERE created_by = ? AND status NOT IN ('done', 'cancelled') ORDER BY updated_at DESC", (agent_id,)).fetchall()
+    assigned = conn.execute("SELECT * FROM tasks WHERE (assigned_to = ? OR claimed_by = ?) AND status NOT IN ('done', 'cancelled') ORDER BY updated_at DESC", (agent_id, agent_id)).fetchall()
+    conn.close()
+    return {"created_by_me": [_task_to_dict(r) for r in created], "assigned_to_me": [_task_to_dict(r) for r in assigned]}
+
+@app.get("/tasks/my/feed")
+def my_task_feed(limit: int = Query(20, le=100), agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    rows = conn.execute("""SELECT h.* FROM task_history h JOIN tasks t ON h.task_id = t.id
+        WHERE t.created_by = ? OR t.assigned_to = ? OR t.claimed_by = ?
+        ORDER BY h.created_at DESC LIMIT ?""", (agent_id, agent_id, agent_id, limit)).fetchall()
+    conn.close()
+    return {"feed": [dict(r) for r in rows]}
+
+@app.get("/board")
+def board_view(agent_id: str = Depends(get_agent_id)):
+    conn = get_db()
+    board = {}
+    for s in ["open", "claimed", "in_progress", "blocked", "done"]:
+        rows = conn.execute("SELECT * FROM tasks WHERE status = ? ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 WHEN 'low' THEN 3 END, updated_at DESC LIMIT 50", (s,)).fetchall()
+        board[s] = [_task_to_dict(r) for r in rows]
+    conn.close()
+    return {"board": board}
+
+@app.get("/board/web")
+def task_board_web():
+    p = os.path.join(os.path.dirname(__file__), "taskboard.html")
+    if os.path.exists(p):
+        return Response(content=open(p).read(), media_type="text/html")
+    return Response(content="<h1>Task Board</h1><p>taskboard.html not found</p>", media_type="text/html")
+
+# ── Web UI ────────────────────────────────────────────
 
 @app.get("/web")
 def web_ui():

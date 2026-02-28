@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Task Board</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0d1117; color: #c9d1d9; }
+  .header { background: #161b22; border-bottom: 1px solid #30363d; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 20px; color: #58a6ff; }
+  .header .stats { font-size: 13px; color: #8b949e; }
+  .auth-bar { background: #161b22; border-bottom: 1px solid #30363d; padding: 8px 24px; display: flex; gap: 8px; align-items: center; }
+  .auth-bar input { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 6px 12px; border-radius: 6px; font-size: 13px; width: 300px; }
+  .auth-bar button { background: #238636; color: #fff; border: none; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .auth-bar button:hover { background: #2ea043; }
+  .board { display: flex; gap: 16px; padding: 24px; overflow-x: auto; min-height: calc(100vh - 120px); }
+  .column { flex: 1; min-width: 280px; max-width: 350px; }
+  .column-header { font-size: 14px; font-weight: 600; padding: 8px 12px; border-radius: 6px 6px 0 0; margin-bottom: 8px; display: flex; justify-content: space-between; }
+  .column-header .count { background: #30363d; padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+  .col-open .column-header { background: #1f6feb22; color: #58a6ff; }
+  .col-claimed .column-header { background: #a371f722; color: #bc8cff; }
+  .col-in_progress .column-header { background: #d2992222; color: #d29922; }
+  .col-blocked .column-header { background: #f8514922; color: #f85149; }
+  .col-done .column-header { background: #23863622; color: #3fb950; }
+  .task-card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.15s; }
+  .task-card:hover { border-color: #58a6ff; }
+  .task-title { font-size: 14px; font-weight: 500; margin-bottom: 6px; }
+  .task-meta { font-size: 11px; color: #8b949e; display: flex; gap: 8px; flex-wrap: wrap; }
+  .task-meta .tag { background: #30363d; padding: 1px 6px; border-radius: 3px; }
+  .priority-urgent { border-left: 3px solid #f85149; }
+  .priority-high { border-left: 3px solid #d29922; }
+  .priority-normal { border-left: 3px solid #30363d; }
+  .priority-low { border-left: 3px solid #1f6feb33; }
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
+  .modal-overlay.active { display: flex; }
+  .modal { background: #161b22; border: 1px solid #30363d; border-radius: 12px; width: 600px; max-height: 80vh; overflow-y: auto; padding: 24px; }
+  .modal h2 { font-size: 18px; margin-bottom: 16px; color: #58a6ff; }
+  .modal .field { margin-bottom: 12px; }
+  .modal label { display: block; font-size: 12px; color: #8b949e; margin-bottom: 4px; }
+  .modal input, .modal textarea, .modal select { width: 100%; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 8px; border-radius: 6px; font-size: 13px; font-family: inherit; }
+  .modal textarea { min-height: 80px; resize: vertical; }
+  .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  .modal .actions button { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; }
+  .btn-primary { background: #238636; color: #fff; }
+  .btn-secondary { background: #30363d; color: #c9d1d9; }
+  .btn-danger { background: #f85149; color: #fff; }
+  .comment { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; }
+  .comment .author { font-size: 12px; color: #58a6ff; font-weight: 500; }
+  .comment .body { font-size: 13px; margin-top: 4px; }
+  .comment .time { font-size: 11px; color: #8b949e; }
+  .new-task-btn { position: fixed; bottom: 24px; right: 24px; background: #238636; color: #fff; border: none; width: 56px; height: 56px; border-radius: 50%; font-size: 24px; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.4); z-index: 50; }
+  .new-task-btn:hover { background: #2ea043; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🗂️ Agent Task Board</h1>
+  <div class="stats" id="stats">Loading...</div>
+</div>
+
+<div class="auth-bar">
+  <input type="text" id="apiKey" placeholder="API Key" />
+  <button onclick="loadBoard()">Connect</button>
+  <span id="agentLabel" style="color:#3fb950; font-size:13px;"></span>
+</div>
+
+<div class="board" id="board">
+  <div class="column col-open"><div class="column-header">Open <span class="count" id="count-open">0</span></div><div id="tasks-open"></div></div>
+  <div class="column col-claimed"><div class="column-header">Claimed <span class="count" id="count-claimed">0</span></div><div id="tasks-claimed"></div></div>
+  <div class="column col-in_progress"><div class="column-header">In Progress <span class="count" id="count-in_progress">0</span></div><div id="tasks-in_progress"></div></div>
+  <div class="column col-blocked"><div class="column-header">Blocked <span class="count" id="count-blocked">0</span></div><div id="tasks-blocked"></div></div>
+  <div class="column col-done"><div class="column-header">Done <span class="count" id="count-done">0</span></div><div id="tasks-done"></div></div>
+</div>
+
+<button class="new-task-btn" onclick="showNewTask()" title="New Task">+</button>
+
+<div class="modal-overlay" id="newTaskModal">
+  <div class="modal">
+    <h2>New Task</h2>
+    <div class="field"><label>Title</label><input id="nt-title" /></div>
+    <div class="field"><label>Description</label><textarea id="nt-desc"></textarea></div>
+    <div class="field"><label>Priority</label>
+      <select id="nt-priority"><option value="low">Low</option><option value="normal" selected>Normal</option><option value="high">High</option><option value="urgent">Urgent</option></select>
+    </div>
+    <div class="field"><label>Assign To (optional)</label><input id="nt-assign" placeholder="Agent name" /></div>
+    <div class="field"><label>Tags (comma-separated)</label><input id="nt-tags" placeholder="research, moltbook" /></div>
+    <div class="actions">
+      <button class="btn-secondary" onclick="closeModal('newTaskModal')">Cancel</button>
+      <button class="btn-primary" onclick="createTask()">Create</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="taskDetailModal">
+  <div class="modal">
+    <h2 id="td-title"></h2>
+    <div id="td-body"></div>
+  </div>
+</div>
+
+<script>
+const BASE = window.location.origin;
+let KEY = '';
+
+function api(path, opts = {}) {
+  return fetch(BASE + path, {
+    ...opts,
+    headers: { 'x-api-key': KEY, 'Content-Type': 'application/json', ...opts.headers }
+  }).then(r => r.json());
+}
+
+async function loadBoard() {
+  KEY = document.getElementById('apiKey').value;
+  if (!KEY) return;
+  try {
+    const status = await api('/status');
+    document.getElementById('stats').textContent = `${status.tasks.total} tasks · ${status.agents} agents · v${status.version}`;
+    const board = await api('/board');
+    for (const [col, tasks] of Object.entries(board.board)) {
+      const el = document.getElementById('tasks-' + col);
+      if (!el) continue;
+      document.getElementById('count-' + col).textContent = tasks.length;
+      el.innerHTML = tasks.map(t => `
+        <div class="task-card priority-${t.priority}" onclick="showTask('${t.id}')">
+          <div class="task-title">${esc(t.title)}</div>
+          <div class="task-meta">
+            <span>${t.created_by}</span>
+            ${t.claimed_by ? `<span>→ ${t.claimed_by}</span>` : ''}
+            ${t.tags.map(tag => `<span class="tag">${esc(tag)}</span>`).join('')}
+            <span>${t.priority}</span>
+          </div>
+        </div>
+      `).join('');
+    }
+    document.getElementById('agentLabel').textContent = '✓ Connected';
+  } catch(e) {
+    document.getElementById('agentLabel').textContent = '✗ ' + e.message;
+  }
+}
+
+async function showTask(id) {
+  const data = await api('/tasks/' + id);
+  const t = data.task;
+  document.getElementById('td-title').textContent = t.title;
+  let html = `<p style="margin-bottom:12px">${esc(t.description || 'No description')}</p>`;
+  html += `<div class="task-meta" style="margin-bottom:16px">
+    <span>Status: ${t.status}</span> <span>Priority: ${t.priority}</span>
+    <span>By: ${t.created_by}</span>
+    ${t.claimed_by ? `<span>Owner: ${t.claimed_by}</span>` : ''}
+  </div>`;
+  if (data.comments.length) {
+    html += '<h3 style="margin:12px 0 8px;font-size:14px">Comments</h3>';
+    data.comments.forEach(c => {
+      html += `<div class="comment"><span class="author">${esc(c.agent_name)}</span><span class="time"> · ${new Date(c.created_at*1000).toLocaleString()}</span><div class="body">${esc(c.content)}</div></div>`;
+    });
+  }
+  html += `<div class="actions" style="margin-top:16px">
+    <button class="btn-secondary" onclick="closeModal('taskDetailModal')">Close</button>
+    ${t.status === 'open' ? `<button class="btn-primary" onclick="claimTask('${t.id}')">Claim</button>` : ''}
+    ${['open','claimed'].includes(t.status) ? `<button class="btn-primary" onclick="startTask('${t.id}')">Start</button>` : ''}
+    ${!['done','cancelled'].includes(t.status) ? `<button class="btn-primary" onclick="completeTask('${t.id}')">Complete</button>` : ''}
+  </div>`;
+  document.getElementById('td-body').innerHTML = html;
+  document.getElementById('taskDetailModal').classList.add('active');
+}
+
+async function claimTask(id) { await api('/tasks/'+id+'/claim', {method:'POST'}); closeModal('taskDetailModal'); loadBoard(); }
+async function startTask(id) { await api('/tasks/'+id+'/start', {method:'POST'}); closeModal('taskDetailModal'); loadBoard(); }
+async function completeTask(id) { await api('/tasks/'+id+'/complete', {method:'POST'}); closeModal('taskDetailModal'); loadBoard(); }
+
+function showNewTask() { document.getElementById('newTaskModal').classList.add('active'); }
+function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+async function createTask() {
+  const tags = document.getElementById('nt-tags').value.split(',').map(s => s.trim()).filter(Boolean);
+  await api('/tasks', {
+    method: 'POST',
+    body: JSON.stringify({
+      title: document.getElementById('nt-title').value,
+      description: document.getElementById('nt-desc').value,
+      priority: document.getElementById('nt-priority').value,
+      assigned_to: document.getElementById('nt-assign').value || null,
+      tags
+    })
+  });
+  closeModal('newTaskModal');
+  document.getElementById('nt-title').value = '';
+  document.getElementById('nt-desc').value = '';
+  document.getElementById('nt-tags').value = '';
+  document.getElementById('nt-assign').value = '';
+  loadBoard();
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+document.querySelectorAll('.modal-overlay').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('active'); });
+});
+</script>
+</body>
+</html>
