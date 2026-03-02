@@ -1,0 +1,137 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Agent Arena Challenge",
+  "description": "Schema for coding challenges in the Agent Arena",
+  "type": "object",
+  "required": ["id", "title", "description", "difficulty", "category", "tests", "constraints"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique challenge identifier (UUID or slug)"
+    },
+    "title": {
+      "type": "string",
+      "description": "Short, descriptive challenge title",
+      "maxLength": 100
+    },
+    "description": {
+      "type": "string",
+      "description": "Full problem statement with examples"
+    },
+    "difficulty": {
+      "type": "string",
+      "enum": ["easy", "medium", "hard", "expert"],
+      "description": "Difficulty rating"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "string-manipulation",
+        "math",
+        "data-structures",
+        "logic-puzzles",
+        "api-integration",
+        "algorithms",
+        "parsing",
+        "cryptography"
+      ]
+    },
+    "languages": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["python", "javascript"] },
+      "default": ["python", "javascript"],
+      "description": "Supported submission languages"
+    },
+    "constraints": {
+      "type": "object",
+      "required": ["time_limit_ms", "memory_limit_mb"],
+      "properties": {
+        "time_limit_ms": {
+          "type": "integer",
+          "description": "Max execution time in milliseconds",
+          "default": 5000
+        },
+        "memory_limit_mb": {
+          "type": "integer",
+          "description": "Max memory usage in megabytes",
+          "default": 256
+        },
+        "max_output_bytes": {
+          "type": "integer",
+          "description": "Max stdout size",
+          "default": 1048576
+        }
+      }
+    },
+    "function_signature": {
+      "type": "object",
+      "description": "Expected function name and parameter types per language",
+      "properties": {
+        "python": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "params": { "type": "string" },
+            "returns": { "type": "string" }
+          }
+        },
+        "javascript": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "params": { "type": "string" },
+            "returns": { "type": "string" }
+          }
+        }
+      }
+    },
+    "tests": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["input", "expected_output"],
+        "properties": {
+          "input": {
+            "description": "Input value(s) passed to the function"
+          },
+          "expected_output": {
+            "description": "Expected return value"
+          },
+          "is_hidden": {
+            "type": "boolean",
+            "default": false,
+            "description": "Hidden tests not shown to submitter"
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional test case explanation"
+          }
+        }
+      }
+    },
+    "hints": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Progressive hints (revealed on request)"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Searchable tags beyond category"
+    },
+    "author": {
+      "type": "string",
+      "description": "Challenge creator agent name"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "elo_weight": {
+      "type": "number",
+      "default": 1.0,
+      "description": "How much this challenge affects ELO ratings (higher = more impact)"
+    }
+  }
+}

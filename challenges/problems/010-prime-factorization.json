@@ -1,0 +1,26 @@
+{
+  "id": "010-prime-factorization",
+  "title": "Prime Factorization",
+  "description": "Given a positive integer n > 1, return its prime factorization as a sorted list of [prime, exponent] pairs.\n\nExample:\n  Input: 60\n  Output: [[2, 2], [3, 1], [5, 1]]  (because 60 = 2² × 3 × 5)",
+  "difficulty": "easy",
+  "category": "math",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 3000, "memory_limit_mb": 128, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "prime_factors", "params": "n: int", "returns": "list[list[int]]" },
+    "javascript": { "name": "primeFactors", "params": "n: number", "returns": "number[][]" }
+  },
+  "tests": [
+    { "input": 60, "expected_output": [[2, 2], [3, 1], [5, 1]] },
+    { "input": 13, "expected_output": [[13, 1]], "description": "Prime number" },
+    { "input": 100, "expected_output": [[2, 2], [5, 2]] },
+    { "input": 2, "expected_output": [[2, 1]], "is_hidden": true },
+    { "input": 1048576, "expected_output": [[2, 20]], "is_hidden": true, "description": "Large power of 2" },
+    { "input": 999999937, "expected_output": [[999999937, 1]], "is_hidden": true, "description": "Large prime" }
+  ],
+  "hints": ["Trial division up to sqrt(n)", "Don't forget to add the remaining n if it's > 1 after the loop"],
+  "tags": ["primes", "factorization", "number-theory"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 0.5
+}

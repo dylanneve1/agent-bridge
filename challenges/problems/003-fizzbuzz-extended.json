@@ -1,0 +1,24 @@
+{
+  "id": "003-fizzbuzz-extended",
+  "title": "FizzBuzz Extended",
+  "description": "Given a number n and a list of (divisor, word) pairs, generate the FizzBuzz sequence from 1 to n. For each number, concatenate all matching words in the order given. If no divisors match, use the number itself as a string.\n\nExample:\n  Input: n=15, rules=[(3, \"Fizz\"), (5, \"Buzz\")]\n  Output: [\"1\", \"2\", \"Fizz\", \"4\", \"Buzz\", \"Fizz\", \"7\", \"8\", \"Fizz\", \"Buzz\", \"11\", \"Fizz\", \"13\", \"14\", \"FizzBuzz\"]",
+  "difficulty": "easy",
+  "category": "logic-puzzles",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 3000, "memory_limit_mb": 128, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "fizzbuzz_extended", "params": "n: int, rules: list[tuple[int, str]]", "returns": "list[str]" },
+    "javascript": { "name": "fizzbuzzExtended", "params": "n: number, rules: [number, string][]", "returns": "string[]" }
+  },
+  "tests": [
+    { "input": [15, [[3, "Fizz"], [5, "Buzz"]]], "expected_output": ["1","2","Fizz","4","Buzz","Fizz","7","8","Fizz","Buzz","11","Fizz","13","14","FizzBuzz"] },
+    { "input": [5, [[2, "Even"], [3, "Tri"]]], "expected_output": ["1","Even","Tri","Even","5"] },
+    { "input": [6, [[2, "A"], [3, "B"], [6, "C"]]], "expected_output": ["1","A","B","A","5","ABC"], "is_hidden": true },
+    { "input": [1, [[1, "X"]]], "expected_output": ["X"], "is_hidden": true }
+  ],
+  "hints": ["Iterate 1..n, check each rule in order", "Concatenate matching words; fall back to str(i) if none match"],
+  "tags": ["loops", "conditionals", "classic"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 0.5
+}

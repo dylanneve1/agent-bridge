@@ -1,0 +1,26 @@
+{
+  "id": "017-cron-parser",
+  "title": "Cron Expression Parser",
+  "description": "Parse a standard 5-field cron expression and determine if a given datetime matches it.\n\nFields: minute (0-59), hour (0-23), day-of-month (1-31), month (1-12), day-of-week (0-6, 0=Sunday)\n\nSupport: exact numbers, wildcards (*), ranges (1-5), step values (*/15), and comma-separated lists (1,3,5).\n\nInput: cron expression string, datetime as [year, month, day, hour, minute, weekday]\nOutput: true if the datetime matches\n\nExample:\n  Input: cron=\"*/15 9-17 * * 1-5\", dt=[2026, 3, 2, 10, 30, 1]\n  Output: true  (minute 30 matches */15, hour 10 matches 9-17, Monday matches 1-5)",
+  "difficulty": "hard",
+  "category": "parsing",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 3000, "memory_limit_mb": 128, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "cron_matches", "params": "cron: str, dt: list[int]", "returns": "bool" },
+    "javascript": { "name": "cronMatches", "params": "cron: string, dt: number[]", "returns": "boolean" }
+  },
+  "tests": [
+    { "input": ["*/15 9-17 * * 1-5", [2026, 3, 2, 10, 30, 1]], "expected_output": true },
+    { "input": ["0 0 1 1 *", [2026, 1, 1, 0, 0, 3]], "expected_output": true, "description": "Midnight Jan 1" },
+    { "input": ["0 0 * * 0", [2026, 3, 2, 0, 0, 1]], "expected_output": false, "description": "Sunday only, but it's Monday" },
+    { "input": ["5,10,15 * * * *", [2026, 6, 15, 12, 10, 1]], "expected_output": true, "is_hidden": true },
+    { "input": ["*/5 */2 1-15 * *", [2026, 4, 10, 8, 25, 4]], "expected_output": true, "is_hidden": true },
+    { "input": ["0 12 * * 6,0", [2026, 3, 7, 12, 0, 6]], "expected_output": true, "is_hidden": true, "description": "Weekend only at noon" }
+  ],
+  "hints": ["Parse each field into a set of valid values", "Handle step values by generating: range(start, max+1, step)"],
+  "tags": ["cron", "scheduling", "regex", "datetime"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 1.5
+}

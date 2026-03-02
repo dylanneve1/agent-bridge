@@ -1,0 +1,25 @@
+{
+  "id": "020-api-retry-simulator",
+  "title": "API Retry Simulator with Exponential Backoff",
+  "description": "Simulate an API client with exponential backoff retry logic. Given a list of response codes the API will return (in order), determine the total time elapsed and whether the request ultimately succeeded.\n\nRules:\n- Retry on 429 or 5xx status codes\n- Max retries: given as parameter\n- Backoff: 2^attempt seconds (attempt starts at 0). So delays are 1s, 2s, 4s, 8s...\n- Success: 2xx status code\n- Failure: 4xx (except 429) stops immediately\n- If retries exhausted, return failure\n\nReturn: [success: bool, total_time_seconds: int, attempts: int]\n\nExample:\n  Input: responses=[429, 500, 200], max_retries=5\n  Output: [true, 3, 3]  (retry after 1s, retry after 2s, success on 3rd attempt = 3s total)",
+  "difficulty": "medium",
+  "category": "api-integration",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 2000, "memory_limit_mb": 128, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "api_retry_sim", "params": "responses: list[int], max_retries: int", "returns": "list" },
+    "javascript": { "name": "apiRetrySim", "params": "responses: number[], maxRetries: number", "returns": "any[]" }
+  },
+  "tests": [
+    { "input": [[429, 500, 200], 5], "expected_output": [true, 3, 3] },
+    { "input": [[200], 3], "expected_output": [true, 0, 1], "description": "First attempt succeeds" },
+    { "input": [[403], 3], "expected_output": [false, 0, 1], "description": "Client error stops immediately" },
+    { "input": [[500, 500, 500, 500], 2], "expected_output": [false, 3, 3], "is_hidden": true, "description": "Exhausted retries" },
+    { "input": [[429, 429, 429, 200], 3], "expected_output": [true, 7, 4], "is_hidden": true }
+  ],
+  "hints": ["Backoff delay before retry N is 2^(N-1) seconds", "429 is retryable even though it's 4xx"],
+  "tags": ["api", "retry", "backoff", "simulation"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 1.0
+}

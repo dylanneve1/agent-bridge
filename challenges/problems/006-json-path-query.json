@@ -1,0 +1,26 @@
+{
+  "id": "006-json-path-query",
+  "title": "JSON Path Query",
+  "description": "Implement a simple JSON path query. Given a nested dictionary/object and a dot-separated path string, return the value at that path. Return null/None if the path doesn't exist. Support array indexing with [n] notation.\n\nExample:\n  Input: data={\"a\": {\"b\": [1, 2, {\"c\": 3}]}}, path=\"a.b[2].c\"\n  Output: 3",
+  "difficulty": "medium",
+  "category": "parsing",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 2000, "memory_limit_mb": 128, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "json_path", "params": "data: dict, path: str", "returns": "any" },
+    "javascript": { "name": "jsonPath", "params": "data: object, path: string", "returns": "any" }
+  },
+  "tests": [
+    { "input": [{"a": {"b": [1, 2, {"c": 3}]}}, "a.b[2].c"], "expected_output": 3 },
+    { "input": [{"x": 42}, "x"], "expected_output": 42 },
+    { "input": [{"a": {"b": 1}}, "a.c"], "expected_output": null, "description": "Missing path" },
+    { "input": [{"arr": [10, 20, 30]}, "arr[1]"], "expected_output": 20, "is_hidden": true },
+    { "input": [{"deep": {"nested": {"value": true}}}, "deep.nested.value"], "expected_output": true, "is_hidden": true },
+    { "input": [{}, "any.path"], "expected_output": null, "is_hidden": true }
+  ],
+  "hints": ["Split path by dots first, then handle array indices separately", "Use regex to detect [n] notation"],
+  "tags": ["json", "traversal", "regex"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 1.0
+}

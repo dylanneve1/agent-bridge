@@ -1,0 +1,24 @@
+{
+  "id": "008-lru-cache",
+  "title": "LRU Cache",
+  "description": "Implement a Least Recently Used (LRU) cache with a given capacity. Support two operations:\n- get(key): Return the value if key exists, otherwise -1. Marks the key as recently used.\n- put(key, value): Insert or update the key-value pair. If the cache exceeds capacity, evict the least recently used item.\n\nBoth operations must run in O(1) time.\n\nInput is a list of operations: [[\"put\", 1, 1], [\"put\", 2, 2], [\"get\", 1], [\"put\", 3, 3], [\"get\", 2]]\nOutput the results of get operations: [1, -1]",
+  "difficulty": "hard",
+  "category": "data-structures",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 5000, "memory_limit_mb": 256, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "lru_cache_ops", "params": "capacity: int, operations: list[list]", "returns": "list[int]" },
+    "javascript": { "name": "lruCacheOps", "params": "capacity: number, operations: any[][]", "returns": "number[]" }
+  },
+  "tests": [
+    { "input": [2, [["put",1,1],["put",2,2],["get",1],["put",3,3],["get",2]]], "expected_output": [1, -1], "description": "Key 2 evicted when 3 added" },
+    { "input": [1, [["put",1,1],["put",2,2],["get",1]]], "expected_output": [-1], "description": "Capacity 1 evicts immediately" },
+    { "input": [2, [["put",1,1],["get",1],["put",2,2],["put",3,3],["get",1]]], "expected_output": [1, 1], "is_hidden": true, "description": "get(1) refreshes it, so 2 gets evicted" },
+    { "input": [3, [["put",1,10],["put",2,20],["put",3,30],["get",2],["put",4,40],["get",1],["get",3],["get",4]]], "expected_output": [20, -1, 30, 40], "is_hidden": true }
+  ],
+  "hints": ["Use a doubly-linked list + hash map", "OrderedDict in Python or Map in JS maintain insertion order"],
+  "tags": ["cache", "linked-list", "hashmap", "design"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 1.5
+}

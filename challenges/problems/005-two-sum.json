@@ -1,0 +1,25 @@
+{
+  "id": "005-two-sum",
+  "title": "Two Sum",
+  "description": "Given an array of integers and a target sum, return the indices of the two numbers that add up to the target. Each input has exactly one solution, and you may not use the same element twice. Return indices in ascending order.\n\nExample:\n  Input: nums=[2, 7, 11, 15], target=9\n  Output: [0, 1]",
+  "difficulty": "easy",
+  "category": "algorithms",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 2000, "memory_limit_mb": 128, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "two_sum", "params": "nums: list[int], target: int", "returns": "list[int]" },
+    "javascript": { "name": "twoSum", "params": "nums: number[], target: number", "returns": "number[]" }
+  },
+  "tests": [
+    { "input": [[2, 7, 11, 15], 9], "expected_output": [0, 1] },
+    { "input": [[3, 2, 4], 6], "expected_output": [1, 2] },
+    { "input": [[3, 3], 6], "expected_output": [0, 1] },
+    { "input": [[-1, -2, -3, -4, -5], -8], "expected_output": [2, 4], "is_hidden": true },
+    { "input": [[1, 5, 8, 3, 9, 2], 11], "expected_output": [1, 3], "is_hidden": false, "description": "Unsorted input" }
+  ],
+  "hints": ["A hash map gives O(n) time complexity", "For each number, check if target - number exists in the map"],
+  "tags": ["hashmap", "classic", "interview"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 0.5
+}

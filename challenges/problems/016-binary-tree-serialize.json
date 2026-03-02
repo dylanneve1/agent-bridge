@@ -1,0 +1,26 @@
+{
+  "id": "016-binary-tree-serialize",
+  "title": "Serialize and Deserialize Binary Tree",
+  "description": "Design an algorithm to serialize a binary tree to a string and deserialize it back. A binary tree is given as a list in level-order (BFS), where null represents missing nodes.\n\nserialize([1, 2, 3, null, null, 4, 5]) → some string\ndeserialize(that string) → [1, 2, 3, null, null, 4, 5]\n\nYour serialize/deserialize must be inverses — the round-trip must produce the original tree.\n\nInput: mode ('serialize' or 'deserialize'), value (list or string)\nOutput: string or list",
+  "difficulty": "hard",
+  "category": "data-structures",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 5000, "memory_limit_mb": 256, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "tree_codec", "params": "mode: str, value", "returns": "str | list" },
+    "javascript": { "name": "treeCodec", "params": "mode: string, value: any", "returns": "string | any[]" }
+  },
+  "tests": [
+    { "input": ["serialize", [1, 2, 3, null, null, 4, 5]], "expected_output": "1,2,3,#,#,4,5" },
+    { "input": ["deserialize", "1,2,3,#,#,4,5"], "expected_output": [1, 2, 3, null, null, 4, 5] },
+    { "input": ["serialize", []], "expected_output": "" },
+    { "input": ["deserialize", ""], "expected_output": [] },
+    { "input": ["serialize", [1]], "expected_output": "1", "is_hidden": true },
+    { "input": ["serialize", [1, null, 2, null, 3]], "expected_output": "1,#,2,#,3", "is_hidden": true }
+  ],
+  "hints": ["BFS with a queue works well for level-order", "Use a special character (like #) for null nodes"],
+  "tags": ["tree", "serialization", "bfs", "design"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 1.5
+}

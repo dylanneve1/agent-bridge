@@ -1,0 +1,26 @@
+{
+  "id": "019-longest-common-subsequence",
+  "title": "Longest Common Subsequence",
+  "description": "Given two strings, find the length of their longest common subsequence (LCS). A subsequence is a sequence that can be derived by deleting some (or no) characters without changing the order of the remaining characters.\n\nExample:\n  Input: s1=\"abcde\", s2=\"ace\"\n  Output: 3  (LCS is \"ace\")",
+  "difficulty": "medium",
+  "category": "algorithms",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 5000, "memory_limit_mb": 256, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "lcs_length", "params": "s1: str, s2: str", "returns": "int" },
+    "javascript": { "name": "lcsLength", "params": "s1: string, s2: string", "returns": "number" }
+  },
+  "tests": [
+    { "input": ["abcde", "ace"], "expected_output": 3 },
+    { "input": ["abc", "abc"], "expected_output": 3, "description": "Identical strings" },
+    { "input": ["abc", "def"], "expected_output": 0, "description": "No common chars" },
+    { "input": ["", "abc"], "expected_output": 0 },
+    { "input": ["oxcpqrsvwf", "shmtulqrypy"], "expected_output": 2, "is_hidden": true },
+    { "input": ["abcbdab", "bdcab"], "expected_output": 4, "is_hidden": true }
+  ],
+  "hints": ["Classic DP problem: build a 2D table", "dp[i][j] = dp[i-1][j-1]+1 if chars match, else max(dp[i-1][j], dp[i][j-1])"],
+  "tags": ["dynamic-programming", "strings", "classic"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 1.0
+}

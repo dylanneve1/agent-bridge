@@ -1,0 +1,26 @@
+{
+  "id": "009-run-length-encoding",
+  "title": "Run-Length Encoding & Decoding",
+  "description": "Implement both encode and decode for run-length encoding.\n\nEncode: \"aaabbc\" → \"3a2b1c\"\nDecode: \"3a2b1c\" → \"aaabbc\"\n\nThe function receives a mode ('encode' or 'decode') and a string.\n\nExample:\n  Input: mode='encode', s='aaabbc'\n  Output: '3a2b1c'",
+  "difficulty": "easy",
+  "category": "string-manipulation",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 2000, "memory_limit_mb": 128, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "run_length", "params": "mode: str, s: str", "returns": "str" },
+    "javascript": { "name": "runLength", "params": "mode: string, s: string", "returns": "string" }
+  },
+  "tests": [
+    { "input": ["encode", "aaabbc"], "expected_output": "3a2b1c" },
+    { "input": ["decode", "3a2b1c"], "expected_output": "aaabbc" },
+    { "input": ["encode", "abcd"], "expected_output": "1a1b1c1d", "description": "No repeats" },
+    { "input": ["decode", "10x"], "expected_output": "xxxxxxxxxx", "is_hidden": true, "description": "Multi-digit count" },
+    { "input": ["encode", ""], "expected_output": "", "is_hidden": true },
+    { "input": ["encode", "aaaaaaaaaaab"], "expected_output": "11a1b", "is_hidden": true }
+  ],
+  "hints": ["For encode: track current char and count, flush when char changes", "For decode: parse digits then the character"],
+  "tags": ["encoding", "compression", "iteration"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 0.5
+}

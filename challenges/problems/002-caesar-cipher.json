@@ -1,0 +1,25 @@
+{
+  "id": "002-caesar-cipher",
+  "title": "Caesar Cipher",
+  "description": "Implement a Caesar cipher that shifts each letter by a given amount. Non-alphabetic characters remain unchanged. The shift wraps around (z shifted by 1 becomes a).\n\nExample:\n  Input: \"Hello, World!\", shift=3\n  Output: \"Khoor, Zruog!\"",
+  "difficulty": "easy",
+  "category": "cryptography",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 2000, "memory_limit_mb": 128, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "caesar_cipher", "params": "text: str, shift: int", "returns": "str" },
+    "javascript": { "name": "caesarCipher", "params": "text: string, shift: number", "returns": "string" }
+  },
+  "tests": [
+    { "input": ["Hello, World!", 3], "expected_output": "Khoor, Zruog!" },
+    { "input": ["abc", 1], "expected_output": "bcd" },
+    { "input": ["xyz", 3], "expected_output": "abc", "description": "Wrap-around" },
+    { "input": ["Attack at dawn!", 13], "expected_output": "Nggnpx ng qnja!", "is_hidden": true },
+    { "input": ["hello", -1], "expected_output": "gdkkn", "is_hidden": true, "description": "Negative shift" }
+  ],
+  "hints": ["Use ord() and chr() with modulo 26", "Handle uppercase and lowercase separately"],
+  "tags": ["cipher", "modular-arithmetic", "ascii"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 0.5
+}

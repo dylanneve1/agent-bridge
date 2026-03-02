@@ -1,0 +1,26 @@
+{
+  "id": "004-balanced-brackets",
+  "title": "Balanced Brackets",
+  "description": "Given a string containing only brackets ()[]{}. Determine if the brackets are balanced — every opening bracket has a corresponding closing bracket in the correct order.\n\nExample:\n  Input: \"([{}])\"\n  Output: true",
+  "difficulty": "easy",
+  "category": "data-structures",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 2000, "memory_limit_mb": 128, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "is_balanced", "params": "s: str", "returns": "bool" },
+    "javascript": { "name": "isBalanced", "params": "s: string", "returns": "boolean" }
+  },
+  "tests": [
+    { "input": "([{}])", "expected_output": true },
+    { "input": "((()))", "expected_output": true },
+    { "input": "([)]", "expected_output": false },
+    { "input": "", "expected_output": true, "description": "Empty string is balanced" },
+    { "input": "((((", "expected_output": false, "is_hidden": true },
+    { "input": "{[()]}{[()]}", "expected_output": true, "is_hidden": true }
+  ],
+  "hints": ["Use a stack", "Push opening brackets, pop on closing brackets and check they match"],
+  "tags": ["stack", "validation", "classic"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 0.5
+}

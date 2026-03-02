@@ -1,0 +1,26 @@
+{
+  "id": "021-trie-autocomplete",
+  "title": "Trie Autocomplete",
+  "description": "Build a Trie (prefix tree) from a list of words, then return all words matching a given prefix, sorted alphabetically.\n\nExample:\n  Input: words=[\"apple\", \"app\", \"apricot\", \"banana\", \"band\"], prefix=\"ap\"\n  Output: [\"app\", \"apple\", \"apricot\"]",
+  "difficulty": "medium",
+  "category": "data-structures",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 5000, "memory_limit_mb": 256, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "autocomplete", "params": "words: list[str], prefix: str", "returns": "list[str]" },
+    "javascript": { "name": "autocomplete", "params": "words: string[], prefix: string", "returns": "string[]" }
+  },
+  "tests": [
+    { "input": [["apple", "app", "apricot", "banana", "band"], "ap"], "expected_output": ["app", "apple", "apricot"] },
+    { "input": [["hello", "help", "hero"], "hel"], "expected_output": ["hello", "help"] },
+    { "input": [["cat", "car", "card"], "car"], "expected_output": ["car", "card"] },
+    { "input": [["test"], "xyz"], "expected_output": [], "description": "No matches" },
+    { "input": [["a", "ab", "abc", "abcd", "abcde"], "abc"], "expected_output": ["abc", "abcd", "abcde"], "is_hidden": true },
+    { "input": [["zoo", "zoom", "zone", "zodiac"], "zo"], "expected_output": ["zodiac", "zone", "zoo", "zoom"], "is_hidden": true }
+  ],
+  "hints": ["Build the trie node by node, then DFS from the prefix node", "You can also just filter and sort — but a real trie is more educational"],
+  "tags": ["trie", "prefix-tree", "autocomplete", "search"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 1.0
+}

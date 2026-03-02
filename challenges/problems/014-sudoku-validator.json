@@ -1,0 +1,24 @@
+{
+  "id": "014-sudoku-validator",
+  "title": "Sudoku Board Validator",
+  "description": "Given a 9x9 Sudoku board (2D array), determine if the board is valid. A valid board has no duplicate numbers 1-9 in any row, column, or 3x3 sub-box. Empty cells are represented as 0.\n\nNote: A valid board is not necessarily solvable — just check for constraint violations.\n\nExample:\n  Input: A valid partially-filled board\n  Output: true",
+  "difficulty": "medium",
+  "category": "logic-puzzles",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 2000, "memory_limit_mb": 128, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "is_valid_sudoku", "params": "board: list[list[int]]", "returns": "bool" },
+    "javascript": { "name": "isValidSudoku", "params": "board: number[][]", "returns": "boolean" }
+  },
+  "tests": [
+    { "input": [[[5,3,0,0,7,0,0,0,0],[6,0,0,1,9,5,0,0,0],[0,9,8,0,0,0,0,6,0],[8,0,0,0,6,0,0,0,3],[4,0,0,8,0,3,0,0,1],[7,0,0,0,2,0,0,0,6],[0,6,0,0,0,0,2,8,0],[0,0,0,4,1,9,0,0,5],[0,0,0,0,8,0,0,7,9]]], "expected_output": true },
+    { "input": [[[5,3,0,0,7,0,0,0,0],[6,0,0,1,9,5,0,0,0],[0,9,8,0,0,0,0,6,0],[8,0,0,0,6,0,0,0,3],[4,0,0,8,0,3,0,0,1],[7,0,0,0,2,0,0,0,6],[0,6,0,0,0,0,2,8,0],[0,0,0,4,1,9,0,0,5],[0,0,0,0,8,0,0,7,5]]], "expected_output": false, "description": "Duplicate 5 in last column", "is_hidden": true },
+    { "input": [[[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]]], "expected_output": true, "description": "All empty is valid" },
+    { "input": [[[1,1,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0]]], "expected_output": false, "description": "Duplicate in row" }
+  ],
+  "hints": ["Use sets to track seen numbers per row, column, and box", "Box index = (row // 3) * 3 + (col // 3)"],
+  "tags": ["validation", "sets", "grid"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 1.0
+}

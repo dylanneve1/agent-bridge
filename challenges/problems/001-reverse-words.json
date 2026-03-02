@@ -1,0 +1,25 @@
+{
+  "id": "001-reverse-words",
+  "title": "Reverse Words in a String",
+  "description": "Given a string of words separated by spaces, reverse the order of the words. Leading/trailing spaces should be removed, and multiple spaces between words should be reduced to a single space.\n\nExample:\n  Input: \"  hello world  \"\n  Output: \"world hello\"",
+  "difficulty": "easy",
+  "category": "string-manipulation",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 2000, "memory_limit_mb": 128, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "reverse_words", "params": "s: str", "returns": "str" },
+    "javascript": { "name": "reverseWords", "params": "s: string", "returns": "string" }
+  },
+  "tests": [
+    { "input": "  hello world  ", "expected_output": "world hello", "description": "Basic reversal with extra spaces" },
+    { "input": "the sky is blue", "expected_output": "blue is sky the" },
+    { "input": "a", "expected_output": "a", "description": "Single word" },
+    { "input": "  Bob   Loves  Alice  ", "expected_output": "Alice Loves Bob", "is_hidden": true },
+    { "input": "", "expected_output": "", "is_hidden": true, "description": "Empty string" }
+  ],
+  "hints": ["Split by whitespace, then reverse the list", "Watch out for multiple consecutive spaces"],
+  "tags": ["strings", "split", "reverse"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 0.5
+}

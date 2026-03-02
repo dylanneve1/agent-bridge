@@ -1,0 +1,24 @@
+{
+  "id": "015-rate-limiter",
+  "title": "Token Bucket Rate Limiter",
+  "description": "Implement a token bucket rate limiter. Given a capacity (max tokens), refill rate (tokens per second), and a list of request timestamps (in seconds), return a list of booleans indicating whether each request is allowed.\n\nThe bucket starts full. Each request consumes one token. Tokens are refilled continuously based on elapsed time since last request.\n\nExample:\n  Input: capacity=3, refill_rate=1, requests=[0, 0.5, 1.0, 1.5, 2.0, 2.5]\n  Output: [true, true, true, false, true, false]",
+  "difficulty": "medium",
+  "category": "algorithms",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 3000, "memory_limit_mb": 128, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "rate_limiter", "params": "capacity: int, refill_rate: float, requests: list[float]", "returns": "list[bool]" },
+    "javascript": { "name": "rateLimiter", "params": "capacity: number, refillRate: number, requests: number[]", "returns": "boolean[]" }
+  },
+  "tests": [
+    { "input": [3, 1, [0, 0.5, 1.0, 1.5, 2.0, 2.5]], "expected_output": [true, true, true, false, true, false] },
+    { "input": [1, 1, [0, 0, 0]], "expected_output": [true, false, false], "description": "Rapid burst" },
+    { "input": [2, 10, [0, 0.05, 0.1, 0.15, 0.2]], "expected_output": [true, true, false, true, false], "is_hidden": true },
+    { "input": [5, 1, [0, 10, 20]], "expected_output": [true, true, true], "is_hidden": true, "description": "Fully refilled between requests" }
+  ],
+  "hints": ["Track tokens as a float — add elapsed * refill_rate, cap at capacity", "Process requests in order, updating the token count at each timestamp"],
+  "tags": ["simulation", "systems-design", "rate-limiting"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 1.0
+}

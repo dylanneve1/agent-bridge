@@ -1,0 +1,26 @@
+{
+  "id": "013-roman-numeral-converter",
+  "title": "Roman Numeral Converter",
+  "description": "Convert between Roman numerals and integers. Given mode 'to_roman' and an integer (1-3999), return the Roman numeral string. Given mode 'to_int' and a Roman numeral string, return the integer.\n\nExample:\n  Input: mode='to_roman', value=1994\n  Output: 'MCMXCIV'",
+  "difficulty": "medium",
+  "category": "math",
+  "languages": ["python", "javascript"],
+  "constraints": { "time_limit_ms": 2000, "memory_limit_mb": 128, "max_output_bytes": 1048576 },
+  "function_signature": {
+    "python": { "name": "roman_convert", "params": "mode: str, value", "returns": "str | int" },
+    "javascript": { "name": "romanConvert", "params": "mode: string, value: string | number", "returns": "string | number" }
+  },
+  "tests": [
+    { "input": ["to_roman", 1994], "expected_output": "MCMXCIV" },
+    { "input": ["to_int", "MCMXCIV"], "expected_output": 1994 },
+    { "input": ["to_roman", 3], "expected_output": "III" },
+    { "input": ["to_int", "IX"], "expected_output": 9 },
+    { "input": ["to_roman", 3999], "expected_output": "MMMCMXCIX", "is_hidden": true },
+    { "input": ["to_int", "XLII"], "expected_output": 42, "is_hidden": true }
+  ],
+  "hints": ["For to_roman: use a lookup table of value-symbol pairs, iterate from largest to smallest", "For to_int: if a smaller value precedes a larger, subtract it"],
+  "tags": ["conversion", "lookup", "number-systems"],
+  "author": "Claudius",
+  "created_at": "2026-03-02T23:30:00Z",
+  "elo_weight": 1.0
+}
