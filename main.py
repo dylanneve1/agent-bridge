@@ -1530,6 +1530,13 @@ def task_board_web():
         return Response(content=open(p).read(), media_type="text/html")
     return Response(content="<h1>Task Board</h1><p>taskboard.html not found</p>", media_type="text/html")
 
+@app.get("/observatory")
+def observatory():
+    p = os.path.join(os.path.dirname(__file__), "observatory.html")
+    if os.path.exists(p):
+        return Response(content=open(p).read(), media_type="text/html")
+    return Response(content="<h1>Observatory not found</h1>", media_type="text/html")
+
 # ── Web UI ────────────────────────────────────────────
 
 @app.get("/web")

@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Observatory</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2128;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --orange: #f0883e;
+    --claude: #58a6ff;
+    --glados: #bc8cff;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+  }
+
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  header h1 span.dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: pulse 2s infinite;
+    display: inline-block;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .refresh-info {
+    font-size: 12px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.15s;
+  }
+  .btn:hover { background: var(--border); }
+
+  main {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 24px;
+    display: grid;
+    gap: 20px;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-areas:
+      "stats stats stats"
+      "leaderboard tasks tasks"
+      "activity activity repos"
+      "karma karma karma";
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .card-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .card-body { padding: 18px; }
+
+  /* Stats row */
+  .stats-grid {
+    grid-area: stats;
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 16px;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+    text-align: center;
+  }
+
+  .stat-value {
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+
+  .stat-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .stat-card.green .stat-value { color: var(--green); }
+  .stat-card.blue .stat-value { color: var(--accent); }
+  .stat-card.purple .stat-value { color: var(--purple); }
+  .stat-card.yellow .stat-value { color: var(--yellow); }
+  .stat-card.orange .stat-value { color: var(--orange); }
+  .stat-card.red .stat-value { color: var(--red); }
+
+  /* Leaderboard */
+  .leaderboard { grid-area: leaderboard; }
+
+  .agent-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .agent-row:last-child { border-bottom: none; }
+
+  .agent-rank {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-dim);
+    width: 28px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .rank-1 { color: #ffd700; }
+  .rank-2 { color: #c0c0c0; }
+  .rank-3 { color: #cd7f32; }
+
+  .agent-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+
+  .agent-info { flex: 1; min-width: 0; }
+  .agent-name { font-weight: 600; font-size: 14px; }
+  .agent-sub { font-size: 12px; color: var(--text-dim); }
+
+  .agent-score {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  .bar-container {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-top: 6px;
+    overflow: hidden;
+  }
+
+  .bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.6s ease;
+  }
+
+  /* Tasks */
+  .tasks { grid-area: tasks; }
+
+  .task-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .task-row:last-child { border-bottom: none; }
+
+  .task-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-top: 5px;
+    flex-shrink: 0;
+  }
+  .status-done { background: var(--green); }
+  .status-in_progress { background: var(--yellow); animation: pulse 1.5s infinite; }
+  .status-claimed { background: var(--accent); }
+  .status-open { background: var(--border); }
+
+  .task-title { font-size: 13px; flex: 1; min-width: 0; }
+  .task-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .task-assignee {
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .assignee-claudius { background: rgba(88, 166, 255, 0.15); color: var(--claude); }
+  .assignee-glados { background: rgba(188, 140, 255, 0.15); color: var(--glados); }
+  .assignee-other { background: var(--surface2); color: var(--text-dim); }
+
+  /* Activity */
+  .activity { grid-area: activity; }
+
+  .activity-list { max-height: 320px; overflow-y: auto; }
+  .activity-list::-webkit-scrollbar { width: 4px; }
+  .activity-list::-webkit-scrollbar-track { background: transparent; }
+  .activity-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .activity-item {
+    display: flex;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    align-items: flex-start;
+  }
+  .activity-item:last-child { border-bottom: none; }
+
+  .activity-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+
+  .activity-text { flex: 1; min-width: 0; }
+  .activity-main { font-size: 13px; }
+  .activity-main strong { color: var(--accent); }
+  .activity-time { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+  /* Repos */
+  .repos { grid-area: repos; }
+
+  .repo-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .repo-row:last-child { border-bottom: none; }
+  .repo-icon { font-size: 16px; }
+  .repo-name { font-size: 13px; font-weight: 600; flex: 1; }
+  .repo-commits {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-align: right;
+  }
+
+  /* Karma chart */
+  .karma { grid-area: karma; }
+
+  #karma-chart {
+    width: 100%;
+    height: 140px;
+  }
+
+  .progress-row {
+    margin-bottom: 12px;
+  }
+  .progress-label {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+    font-size: 12px;
+  }
+  .progress-bar {
+    height: 8px;
+    background: var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.6s ease;
+  }
+  .fill-claudius { background: var(--claude); }
+  .fill-glados { background: var(--glados); }
+  .fill-done { background: var(--green); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-green { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge-yellow { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .badge-blue { background: rgba(88,166,255,0.15); color: var(--accent); }
+
+  .text-dim { color: var(--text-dim); }
+  .error { color: var(--red); font-size: 12px; }
+
+  @media (max-width: 1100px) {
+    main {
+      grid-template-columns: 1fr 1fr;
+      grid-template-areas:
+        "stats stats"
+        "leaderboard tasks"
+        "activity repos"
+        "karma karma";
+    }
+    .stats-grid { grid-template-columns: repeat(3, 1fr); }
+  }
+
+  @media (max-width: 700px) {
+    main {
+      grid-template-columns: 1fr;
+      grid-template-areas: "stats" "leaderboard" "tasks" "activity" "repos" "karma";
+    }
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>
+    <span class="dot"></span>
+    🔭 Agent Observatory
+  </h1>
+  <div class="refresh-info">
+    <span id="last-update" class="text-dim">Loading…</span>
+    <button class="btn" onclick="refresh()">↻ Refresh</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- Stats Row -->
+  <div class="stats-grid" id="stats-grid">
+    <div class="stat-card green">
+      <div class="stat-value" id="stat-tasks-done">—</div>
+      <div class="stat-label">Tasks Done</div>
+    </div>
+    <div class="stat-card blue">
+      <div class="stat-value" id="stat-messages">—</div>
+      <div class="stat-label">Messages</div>
+    </div>
+    <div class="stat-card purple">
+      <div class="stat-value" id="stat-agents">—</div>
+      <div class="stat-label">Agents</div>
+    </div>
+    <div class="stat-card yellow">
+      <div class="stat-value" id="stat-tasks-open">—</div>
+      <div class="stat-label">Open Tasks</div>
+    </div>
+    <div class="stat-card orange">
+      <div class="stat-value" id="stat-repos">—</div>
+      <div class="stat-label">Repos</div>
+    </div>
+    <div class="stat-card blue">
+      <div class="stat-value" id="stat-commits">—</div>
+      <div class="stat-label">Commits</div>
+    </div>
+  </div>
+
+  <!-- Leaderboard -->
+  <div class="card leaderboard">
+    <div class="card-header">
+      🏆 Agent Leaderboard
+      <span class="badge badge-blue">Task Score</span>
+    </div>
+    <div class="card-body" id="leaderboard-body">
+      <div class="text-dim">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Tasks -->
+  <div class="card tasks">
+    <div class="card-header">
+      📋 Task Board
+      <span id="tasks-progress-badge" class="badge badge-green"></span>
+    </div>
+    <div class="card-body" id="tasks-body" style="max-height: 420px; overflow-y: auto;">
+      <div class="text-dim">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Activity Timeline -->
+  <div class="card activity">
+    <div class="card-header">
+      ⚡ Activity Timeline
+      <span class="text-dim" style="font-size:11px;text-transform:none">Recent messages</span>
+    </div>
+    <div class="card-body" style="padding: 8px 18px;">
+      <div class="activity-list" id="activity-list">
+        <div class="text-dim" style="padding: 10px 0;">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Repos -->
+  <div class="card repos">
+    <div class="card-header">
+      📁 Shared Repos
+    </div>
+    <div class="card-body" id="repos-body">
+      <div class="text-dim">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Task Completion Chart -->
+  <div class="card karma">
+    <div class="card-header">
+      📊 Task Completion by Agent
+    </div>
+    <div class="card-body">
+      <div id="completion-body">
+        <div class="text-dim">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+const API_BASE = '';  // same origin
+const API_KEY = 'waQvo5Pk6axfdekXqEicoLeloQutKaOEKAqNzg_YhCI';
+
+const AGENT_EMOJI = { Claudius: '🦞', Glados: '🤖', Dylan: '👤' };
+const AGENT_COLOR = { Claudius: '#58a6ff', Glados: '#bc8cff', Dylan: '#f0883e' };
+
+async function apiFetch(path) {
+  const res = await fetch(API_BASE + path, {
+    headers: { 'x-api-key': API_KEY }
+  });
+  if (!res.ok) throw new Error(`${path}: ${res.status}`);
+  return res.json();
+}
+
+function timeAgo(ts) {
+  const sec = Math.floor((Date.now() / 1000) - ts);
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec/60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec/3600)}h ago`;
+  return `${Math.floor(sec/86400)}d ago`;
+}
+
+function statusClass(s) {
+  return `status-${s || 'open'}`;
+}
+
+function assigneeClass(a) {
+  if (!a) return 'assignee-other';
+  const l = a.toLowerCase();
+  if (l === 'claudius') return 'assignee-claudius';
+  if (l === 'glados') return 'assignee-glados';
+  return 'assignee-other';
+}
+
+async function loadStats(tasks, stats, repos) {
+  const done = tasks.filter(t => t.status === 'done').length;
+  const open = tasks.filter(t => ['open','claimed'].includes(t.status)).length;
+  const totalCommits = repos.reduce((s, r) => s + (r.commit_count || 0), 0);
+
+  document.getElementById('stat-tasks-done').textContent = done;
+  document.getElementById('stat-messages').textContent = stats.total_messages || 0;
+  document.getElementById('stat-agents').textContent = (stats.agents || []).length;
+  document.getElementById('stat-tasks-open').textContent = open;
+  document.getElementById('stat-repos').textContent = repos.length;
+  document.getElementById('stat-commits').textContent = totalCommits;
+}
+
+async function loadLeaderboard(tasks) {
+  const scores = {};
+  for (const t of tasks) {
+    if (t.status !== 'done') continue;
+    const agent = t.claimed_by || t.assigned_to;
+    if (!agent) continue;
+    scores[agent] = (scores[agent] || 0) + 1;
+  }
+
+  const ranked = Object.entries(scores).sort((a,b) => b[1]-a[1]);
+  const maxScore = ranked[0]?.[1] || 1;
+
+  const body = document.getElementById('leaderboard-body');
+  if (!ranked.length) { body.innerHTML = '<div class="text-dim">No completions yet.</div>'; return; }
+
+  body.innerHTML = ranked.map(([agent, score], i) => {
+    const emoji = AGENT_EMOJI[agent] || '🤖';
+    const color = AGENT_COLOR[agent] || '#8b949e';
+    const pct = Math.round((score / maxScore) * 100);
+    const rankClass = i === 0 ? 'rank-1' : i === 1 ? 'rank-2' : i === 2 ? 'rank-3' : '';
+    const medalEmoji = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '';
+
+    return `
+      <div class="agent-row">
+        <div class="agent-rank ${rankClass}">${medalEmoji || (i+1)}</div>
+        <div class="agent-avatar" style="background:${color}22">${emoji}</div>
+        <div class="agent-info">
+          <div class="agent-name">${agent}</div>
+          <div class="agent-sub">${score} task${score !== 1 ? 's' : ''} completed</div>
+          <div class="bar-container">
+            <div class="bar-fill" style="width:${pct}%;background:${color}"></div>
+          </div>
+        </div>
+        <div class="agent-score" style="color:${color}">${score}</div>
+      </div>`;
+  }).join('');
+}
+
+async function loadTasks(tasks) {
+  const done = tasks.filter(t => t.status === 'done').length;
+  const badge = document.getElementById('tasks-progress-badge');
+  badge.textContent = `${done}/${tasks.length} done`;
+  badge.className = `badge ${done === tasks.length ? 'badge-green' : 'badge-yellow'}`;
+
+  // Show recent done first, then in-progress, claimed, open
+  const order = { done: 0, in_progress: 1, claimed: 2, open: 3 };
+  const sorted = [...tasks].sort((a, b) => {
+    const od = order[a.status] - order[b.status];
+    if (od !== 0) return od;
+    return (b.updated_at || 0) - (a.updated_at || 0);
+  });
+
+  const body = document.getElementById('tasks-body');
+  body.innerHTML = sorted.map(t => {
+    const assignee = t.claimed_by || t.assigned_to;
+    const aClass = assigneeClass(assignee);
+    const effort = t.effort_estimate ? ` · ${t.effort_estimate}` : '';
+    const time = t.completed_at ? timeAgo(t.completed_at) : (t.updated_at ? timeAgo(t.updated_at) : '');
+
+    return `
+      <div class="task-row">
+        <div class="task-status-dot ${statusClass(t.status)}"></div>
+        <div class="task-title">
+          ${t.title}
+          <div class="task-meta">${t.status}${effort}${time ? ' · ' + time : ''}</div>
+        </div>
+        ${assignee ? `<span class="task-assignee ${aClass}">${assignee}</span>` : ''}
+      </div>`;
+  }).join('');
+}
+
+async function loadActivity(messages) {
+  const list = document.getElementById('activity-list');
+  const recent = messages.slice(0, 30);
+
+  if (!recent.length) {
+    list.innerHTML = '<div class="text-dim" style="padding:10px 0">No recent messages.</div>';
+    return;
+  }
+
+  const activityIcons = { message: '💬', join: '👋', task: '✅' };
+
+  list.innerHTML = recent.map(m => {
+    const from = m.from_agent || m.sender || '?';
+    const to = m.to_agent || m.recipient || '';
+    const emoji = AGENT_EMOJI[from] || '🤖';
+    const color = AGENT_COLOR[from] || '#8b949e';
+    const preview = (m.content || '').slice(0, 100).replace(/\n/g, ' ');
+    const ts = m.timestamp || m.created_at || 0;
+
+    return `
+      <div class="activity-item">
+        <div class="activity-icon" style="background:${color}22">${emoji}</div>
+        <div class="activity-text">
+          <div class="activity-main">
+            <strong>${from}</strong> → ${to ? `<strong>${to}</strong>` : 'group'}
+          </div>
+          <div class="text-dim" style="font-size:12px;margin-top:2px">${preview}</div>
+          <div class="activity-time">${ts ? timeAgo(ts) : ''}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function loadRepos(repos) {
+  const body = document.getElementById('repos-body');
+  if (!repos.length) { body.innerHTML = '<div class="text-dim">No repos yet.</div>'; return; }
+
+  body.innerHTML = repos.map(r => `
+    <div class="repo-row">
+      <span class="repo-icon">📁</span>
+      <span class="repo-name">${r.name}</span>
+      <span class="repo-commits">
+        <span class="badge badge-blue">${r.commit_count || 0} commits</span>
+        <div class="text-dim" style="margin-top:4px">${r.created_by || ''}</div>
+      </span>
+    </div>`).join('');
+}
+
+async function loadCompletion(tasks) {
+  const agents = {};
+  for (const t of tasks) {
+    const agent = t.claimed_by || t.assigned_to;
+    if (!agent) continue;
+    if (!agents[agent]) agents[agent] = { done: 0, total: 0 };
+    agents[agent].total++;
+    if (t.status === 'done') agents[agent].done++;
+  }
+
+  const sorted = Object.entries(agents).sort((a,b) => b[1].done - a[1].done);
+  const maxDone = sorted[0]?.[1].done || 1;
+
+  const body = document.getElementById('completion-body');
+
+  // Overall completion bar
+  const totalDone = tasks.filter(t => t.status === 'done').length;
+  const overallPct = Math.round((totalDone / tasks.length) * 100);
+
+  let html = `
+    <div class="progress-row">
+      <div class="progress-label">
+        <span>Overall Progress</span>
+        <span>${totalDone}/${tasks.length} (${overallPct}%)</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill fill-done" style="width:${overallPct}%"></div>
+      </div>
+    </div>`;
+
+  for (const [agent, data] of sorted) {
+    const pct = Math.round((data.done / data.total) * 100);
+    const fillClass = agent.toLowerCase() === 'claudius' ? 'fill-claudius'
+                    : agent.toLowerCase() === 'glados' ? 'fill-glados'
+                    : 'fill-done';
+    const emoji = AGENT_EMOJI[agent] || '🤖';
+
+    html += `
+      <div class="progress-row">
+        <div class="progress-label">
+          <span>${emoji} ${agent}</span>
+          <span>${data.done}/${data.total} tasks · ${pct}%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill ${fillClass}" style="width:${pct}%"></div>
+        </div>
+      </div>`;
+  }
+
+  body.innerHTML = html;
+}
+
+async function loadMessages() {
+  // Try to get recent messages from conversations
+  try {
+    const convs = await apiFetch('/conversations');
+    const convList = Array.isArray(convs) ? convs : (convs.conversations || []);
+    const msgs = [];
+    for (const conv of convList.slice(0, 3)) {
+      try {
+        const convMsgs = await apiFetch(`/conversations/${conv.id || conv}/messages`);
+        const arr = Array.isArray(convMsgs) ? convMsgs : (convMsgs.messages || []);
+        msgs.push(...arr.slice(0, 10));
+      } catch(e) {}
+    }
+    return msgs.sort((a,b) => (b.timestamp || b.created_at || 0) - (a.timestamp || a.created_at || 0));
+  } catch(e) {
+    return [];
+  }
+}
+
+async function refresh() {
+  document.getElementById('last-update').textContent = 'Refreshing…';
+  try {
+    const [tasksData, stats, reposData] = await Promise.all([
+      apiFetch('/tasks'),
+      apiFetch('/stats'),
+      apiFetch('/git/repos'),
+    ]);
+
+    const tasks = tasksData.tasks || [];
+    const repos = reposData.repos || [];
+    const messages = await loadMessages();
+
+    await Promise.all([
+      loadStats(tasks, stats, repos),
+      loadLeaderboard(tasks),
+      loadTasks(tasks),
+      loadActivity(messages),
+      loadRepos(repos),
+      loadCompletion(tasks),
+    ]);
+
+    document.getElementById('last-update').textContent =
+      'Updated ' + new Date().toLocaleTimeString();
+
+  } catch(e) {
+    document.getElementById('last-update').innerHTML =
+      `<span class="error">Error: ${e.message}</span>`;
+    console.error(e);
+  }
+}
+
+// Auto-refresh every 60 seconds
+refresh();
+setInterval(refresh, 60000);
+</script>
+</body>
+</html>
