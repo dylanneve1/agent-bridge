@@ -1599,6 +1599,178 @@ def observatory():
         return Response(content=open(p).read(), media_type="text/html")
     return Response(content="<h1>Observatory not found</h1>", media_type="text/html")
 
+# ── Arena API ─────────────────────────────────────────
+
+CHALLENGES_DIR = os.path.join(os.path.dirname(__file__), "challenges", "problems")
+ARENA_DB_PATH = os.path.join(os.path.dirname(__file__), "arena.db")
+
+def get_arena_db():
+    conn = sqlite3.connect(ARENA_DB_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("""CREATE TABLE IF NOT EXISTS submissions (
+        id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, challenge_id TEXT NOT NULL,
+        language TEXT NOT NULL DEFAULT 'python', code TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', score REAL DEFAULT 0,
+        tests_passed INTEGER DEFAULT 0, tests_total INTEGER DEFAULT 0,
+        execution_time_ms REAL DEFAULT 0, error TEXT,
+        submitted_at REAL NOT NULL, judged_at REAL
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS leaderboard (
+        agent_id TEXT PRIMARY KEY, elo REAL NOT NULL DEFAULT 1200,
+        wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0,
+        challenges_solved INTEGER DEFAULT 0, challenges_attempted INTEGER DEFAULT 0,
+        total_score REAL DEFAULT 0, last_submission REAL,
+        streak INTEGER DEFAULT 0, best_streak INTEGER DEFAULT 0
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sub_agent ON submissions(agent_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sub_challenge ON submissions(challenge_id)")
+    conn.commit()
+    return conn
+
+def _load_challenges():
+    challenges = []
+    if not os.path.isdir(CHALLENGES_DIR):
+        return challenges
+    for path in sorted(os.listdir(CHALLENGES_DIR)):
+        if path.endswith(".json"):
+            try:
+                with open(os.path.join(CHALLENGES_DIR, path)) as f:
+                    challenges.append(json.load(f))
+            except (json.JSONDecodeError, OSError):
+                continue
+    return challenges
+
+@app.get("/arena")
+def arena_ui():
+    p = os.path.join(os.path.dirname(__file__), "arena.html")
+    if os.path.exists(p):
+        return Response(content=open(p).read(), media_type="text/html")
+    return Response(content="<h1>Arena not found</h1>", media_type="text/html")
+
+@app.get("/arena/challenges")
+def arena_challenges(difficulty: Optional[str] = None, category: Optional[str] = None):
+    challenges = _load_challenges()
+    if difficulty:
+        challenges = [c for c in challenges if c.get("difficulty") == difficulty]
+    if category:
+        challenges = [c for c in challenges if c.get("category") == category]
+    # Strip hidden tests and code from public view
+    public = []
+    for c in challenges:
+        pc = {**c}
+        pc["tests"] = [t for t in c.get("tests", []) if not t.get("is_hidden")]
+        pc["test_count"] = len(c.get("tests", []))
+        pc["visible_test_count"] = len(pc["tests"])
+        public.append(pc)
+    return {"challenges": public, "total": len(public)}
+
+@app.get("/arena/challenges/{challenge_id}")
+def arena_challenge_detail(challenge_id: str):
+    challenges = _load_challenges()
+    for c in challenges:
+        if c.get("id") == challenge_id:
+            pc = {**c}
+            pc["tests"] = [t for t in c.get("tests", []) if not t.get("is_hidden")]
+            pc["test_count"] = len(c.get("tests", []))
+            pc["visible_test_count"] = len(pc["tests"])
+            # Get submission stats
+            db = get_arena_db()
+            row = db.execute(
+                "SELECT COUNT(*) as attempts, SUM(CASE WHEN status='passed' THEN 1 ELSE 0 END) as solves FROM submissions WHERE challenge_id=?",
+                (challenge_id,)
+            ).fetchone()
+            pc["stats"] = {"attempts": row["attempts"], "solves": row["solves"] or 0}
+            # Best submissions
+            best = db.execute(
+                "SELECT agent_id, score, execution_time_ms, language, submitted_at FROM submissions WHERE challenge_id=? AND status='passed' ORDER BY score DESC, execution_time_ms ASC LIMIT 10",
+                (challenge_id,)
+            ).fetchall()
+            pc["best_submissions"] = [dict(r) for r in best]
+            db.close()
+            return pc
+    raise HTTPException(404, "Challenge not found")
+
+@app.get("/arena/leaderboard")
+def arena_leaderboard(limit: int = 50):
+    db = get_arena_db()
+    rows = db.execute(
+        "SELECT * FROM leaderboard ORDER BY elo DESC LIMIT ?", (limit,)
+    ).fetchall()
+    db.close()
+    return {"leaderboard": [dict(r) for r in rows], "total": len(rows)}
+
+@app.get("/arena/stats")
+def arena_stats():
+    challenges = _load_challenges()
+    db = get_arena_db()
+    sub_count = db.execute("SELECT COUNT(*) as c FROM submissions").fetchone()["c"]
+    agents_count = db.execute("SELECT COUNT(DISTINCT agent_id) FROM submissions").fetchone()[0]
+    passed_count = db.execute("SELECT COUNT(*) FROM submissions WHERE status='passed'").fetchone()[0]
+    db.close()
+    diff_dist = {}
+    cat_dist = {}
+    for c in challenges:
+        d = c.get("difficulty", "unknown")
+        diff_dist[d] = diff_dist.get(d, 0) + 1
+        cat = c.get("category", "unknown")
+        cat_dist[cat] = cat_dist.get(cat, 0) + 1
+    return {
+        "total_challenges": len(challenges),
+        "total_submissions": sub_count,
+        "total_agents": agents_count,
+        "total_solves": passed_count,
+        "difficulty_distribution": diff_dist,
+        "category_distribution": cat_dist,
+    }
+
+class ArenaSubmission(BaseModel):
+    agent_id: str
+    challenge_id: str
+    language: str = "python"
+    code: str
+
+@app.post("/arena/submit")
+def arena_submit(sub: ArenaSubmission, x_api_key: str = Header(None)):
+    # Validate challenge exists
+    challenges = _load_challenges()
+    challenge = None
+    for c in challenges:
+        if c.get("id") == sub.challenge_id:
+            challenge = c
+            break
+    if not challenge:
+        raise HTTPException(404, "Challenge not found")
+
+    sub_id = str(uuid.uuid4())
+    now = time.time()
+    db = get_arena_db()
+    db.execute(
+        "INSERT INTO submissions (id, agent_id, challenge_id, language, code, status, submitted_at) VALUES (?,?,?,?,?,?,?)",
+        (sub_id, sub.agent_id, sub.challenge_id, sub.language, sub.code, "pending", now)
+    )
+    db.commit()
+    db.close()
+    sse_publish("arena_submission", {"submission_id": sub_id, "agent_id": sub.agent_id, "challenge_id": sub.challenge_id})
+    return {"submission_id": sub_id, "status": "pending"}
+
+@app.get("/arena/submissions")
+def arena_submissions(agent_id: Optional[str] = None, challenge_id: Optional[str] = None, limit: int = 50):
+    db = get_arena_db()
+    query = "SELECT id, agent_id, challenge_id, language, status, score, tests_passed, tests_total, execution_time_ms, submitted_at FROM submissions WHERE 1=1"
+    params = []
+    if agent_id:
+        query += " AND agent_id=?"
+        params.append(agent_id)
+    if challenge_id:
+        query += " AND challenge_id=?"
+        params.append(challenge_id)
+    query += " ORDER BY submitted_at DESC LIMIT ?"
+    params.append(limit)
+    rows = db.execute(query, params).fetchall()
+    db.close()
+    return {"submissions": [dict(r) for r in rows]}
+
 # ── SSE Endpoint ──────────────────────────────────────
 
 @app.get("/events")
