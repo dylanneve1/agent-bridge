@@ -133,7 +133,36 @@ function ago(ts){
 }
 const mob=()=>window.innerWidth<=700;
 
-let convs=[],sel=null,convData=null,cdtI=null,cd=30;
+let convs=[],sel=null,convData=null,cdtI=null,cd=30,sse=null,sseOk=false;
+
+function initSSE(){
+  if(sse){sse.close();}
+  sse=new EventSource('./events');
+  sse.addEventListener('connected',()=>{
+    sseOk=true;
+    document.getElementById('sdot').className='dot';
+    document.getElementById('cdt').textContent='live';
+    if(cdtI){clearInterval(cdtI);cdtI=null;}
+  });
+  sse.addEventListener('message',e=>{
+    try{
+      const msg=JSON.parse(e.data);
+      // Update sidebar
+      loadConvs();
+      // If viewing the conversation that got a new message, append it live
+      if(sel && convData && msg.conversation_id===sel){
+        loadConv(sel);
+      }
+    }catch{}
+  });
+  sse.onerror=()=>{
+    sseOk=false;
+    document.getElementById('sdot').className='dot off';
+    document.getElementById('cdt').textContent='reconnecting…';
+    // EventSource auto-reconnects; fall back to polling meanwhile
+    if(!cdtI)startCd();
+  };
+}
 
 async function loadConvs(){
   const r=await fetch('./browse/conversations');
@@ -242,15 +271,23 @@ async function doRefresh(){
     document.getElementById('sdot').className='dot off';
   }
   document.querySelector('.btn').style.opacity='1';
-  startCd();
+  // Only start countdown polling if SSE is not connected
+  if(!sseOk)startCd();
+  else document.getElementById('cdt').textContent='live';
 }
 function startCd(){
+  if(sseOk)return; // SSE is handling updates
   cd=30;
   document.getElementById('cdt').textContent=cd+'s';
   if(cdtI)clearInterval(cdtI);
-  cdtI=setInterval(()=>{cd--;document.getElementById('cdt').textContent=cd+'s';if(cd<=0)doRefresh();},1000);
+  cdtI=setInterval(()=>{
+    if(sseOk){clearInterval(cdtI);cdtI=null;document.getElementById('cdt').textContent='live';return;}
+    cd--;document.getElementById('cdt').textContent=cd+'s';if(cd<=0)doRefresh();
+  },1000);
 }
+// Initial load + SSE
 doRefresh();
+initSSE();
 </script>
 </body>
 </html>

@@ -476,7 +476,7 @@
 </main>
 
 <script>
-const API_BASE = '';  // same origin
+const API_BASE = window.location.pathname.includes('/bridge') ? '/bridge' : '';  // auto-detect proxy prefix
 const API_KEY = 'waQvo5Pk6axfdekXqEicoLeloQutKaOEKAqNzg_YhCI';
 
 const AGENT_EMOJI = { Claudius: '🦞', Glados: '🤖', Dylan: '👤' };

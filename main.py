@@ -1,10 +1,10 @@
 """Agent Bridge v5 — Multi-agent collaboration platform: messaging, files, projects, tasks, git"""
 from fastapi import FastAPI, HTTPException, Header, Depends, Request, Response, UploadFile, File, Form, Query
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
-import sqlite3, os, secrets, time, uuid, json, hashlib, mimetypes, shutil, difflib
+import sqlite3, os, secrets, time, uuid, json, hashlib, mimetypes, shutil, difflib, asyncio, threading
 
 # ── Rate limiting note ────────────────────────────────────────────────────────
 # TODO: Add rate limiting middleware if abuse becomes an issue.
@@ -17,6 +17,44 @@ app = FastAPI(title="Agent Bridge v5")
 
 SERVER_START_TIME = time.time()
 VERSION = "5.0.0"
+
+# ── SSE Event Bus ─────────────────────────────────────
+# Thread-safe pub/sub for real-time updates to web clients.
+# Sync endpoints call sse_publish() which puts events into all subscriber queues.
+# The async /events SSE endpoint reads from its own queue.
+
+_sse_lock = threading.Lock()
+_sse_subscribers: list = []  # list of asyncio.Queue (one per connected SSE client)
+_sse_event_id = 0
+
+def sse_publish(event_type: str, data: dict):
+    """Publish an event to all connected SSE clients. Thread-safe."""
+    global _sse_event_id
+    with _sse_lock:
+        _sse_event_id += 1
+        eid = _sse_event_id
+        payload = json.dumps(data)
+        dead = []
+        for q in _sse_subscribers:
+            try:
+                q.put_nowait((eid, event_type, payload))
+            except asyncio.QueueFull:
+                dead.append(q)
+        for q in dead:
+            _sse_subscribers.remove(q)
+
+def _sse_subscribe() -> asyncio.Queue:
+    q: asyncio.Queue = asyncio.Queue(maxsize=256)
+    with _sse_lock:
+        _sse_subscribers.append(q)
+    return q
+
+def _sse_unsubscribe(q: asyncio.Queue):
+    with _sse_lock:
+        try:
+            _sse_subscribers.remove(q)
+        except ValueError:
+            pass
 
 REPOS_DIR = os.path.join(os.path.dirname(__file__), "repos")
 os.makedirs(REPOS_DIR, exist_ok=True)
@@ -447,10 +485,12 @@ def send_to_conv(conv_id: str, msg: ConvMessage, agent_id: str = Depends(get_age
                         (conv_id, agent_id)).fetchone():
         raise HTTPException(403, "Not a member")
     mid = str(uuid.uuid4())
+    ts = time.time()
     conn.execute("INSERT INTO messages (id, conversation_id, from_agent, content, timestamp) VALUES (?, ?, ?, ?, ?)",
-                 (mid, conv_id, agent_id, msg.content, time.time()))
+                 (mid, conv_id, agent_id, msg.content, ts))
     conn.commit()
     conn.close()
+    sse_publish("message", {"id": mid, "conversation_id": conv_id, "from": agent_id, "content": msg.content, "timestamp": ts})
     return {"ok": True, "id": mid}
 
 @app.get("/conversations/{conv_id}/messages")
@@ -500,10 +540,12 @@ def send_dm(msg: SendMessage, agent_id: str = Depends(get_agent_id)):
     conn = get_db()
     conv_id = find_or_create_dm(conn, agent_id, msg.to)
     mid = str(uuid.uuid4())
+    ts = time.time()
     conn.execute("INSERT INTO messages (id, conversation_id, from_agent, to_agent, content, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
-                 (mid, conv_id, agent_id, msg.to, msg.content, time.time()))
+                 (mid, conv_id, agent_id, msg.to, msg.content, ts))
     conn.commit()
     conn.close()
+    sse_publish("message", {"id": mid, "conversation_id": conv_id, "from": agent_id, "to": msg.to, "content": msg.content, "timestamp": ts})
     return {"ok": True, "id": mid, "conversation_id": conv_id, "from": agent_id, "to": msg.to}
 
 @app.get("/inbox")
@@ -1536,6 +1578,40 @@ def observatory():
     if os.path.exists(p):
         return Response(content=open(p).read(), media_type="text/html")
     return Response(content="<h1>Observatory not found</h1>", media_type="text/html")
+
+# ── SSE Endpoint ──────────────────────────────────────
+
+@app.get("/events")
+async def sse_stream(request: Request):
+    """Server-Sent Events stream for real-time updates (messages, tasks, etc.)."""
+    q = _sse_subscribe()
+
+    async def generate():
+        try:
+            # Send initial heartbeat so client knows connection is alive
+            yield f"event: connected\ndata: {json.dumps({'ts': time.time()})}\n\n"
+            while True:
+                # Check if client disconnected
+                if await request.is_disconnected():
+                    break
+                try:
+                    eid, event_type, payload = await asyncio.wait_for(q.get(), timeout=25.0)
+                    yield f"id: {eid}\nevent: {event_type}\ndata: {payload}\n\n"
+                except asyncio.TimeoutError:
+                    # Send keepalive comment every 25s to prevent proxy timeouts
+                    yield f": keepalive {int(time.time())}\n\n"
+        finally:
+            _sse_unsubscribe(q)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        }
+    )
 
 # ── Web UI ────────────────────────────────────────────
 
