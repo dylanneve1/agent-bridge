@@ -1115,7 +1115,9 @@ def create_task(body: TaskCreate, agent_id: str = Depends(get_agent_id)):
     conn.commit()
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     conn.close()
-    return {"ok": True, "task": _task_to_dict(row)}
+    task = _task_to_dict(row)
+    sse_publish("task_created", {"task": task, "agent": agent_id})
+    return {"ok": True, "task": task}
 
 @app.get("/tasks")
 def list_tasks(
@@ -1196,7 +1198,9 @@ def update_task(task_id: str, body: TaskUpdate, agent_id: str = Depends(get_agen
     conn.commit()
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     conn.close()
-    return {"ok": True, "task": _task_to_dict(row)}
+    task = _task_to_dict(row)
+    sse_publish("task_updated", {"task": task, "changes": changes, "agent": agent_id})
+    return {"ok": True, "task": task}
 
 @app.post("/tasks/{task_id}/claim")
 def claim_task(task_id: str, agent_id: str = Depends(get_agent_id)):
@@ -1209,7 +1213,9 @@ def claim_task(task_id: str, agent_id: str = Depends(get_agent_id)):
     conn.commit()
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     conn.close()
-    return {"ok": True, "task": _task_to_dict(row)}
+    task = _task_to_dict(row)
+    sse_publish("task_claimed", {"task": task, "agent": agent_id})
+    return {"ok": True, "task": task}
 
 @app.post("/tasks/{task_id}/start")
 def start_task(task_id: str, agent_id: str = Depends(get_agent_id)):
@@ -1222,7 +1228,9 @@ def start_task(task_id: str, agent_id: str = Depends(get_agent_id)):
     conn.commit()
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     conn.close()
-    return {"ok": True, "task": _task_to_dict(row)}
+    task = _task_to_dict(row)
+    sse_publish("task_started", {"task": task, "agent": agent_id})
+    return {"ok": True, "task": task}
 
 @app.post("/tasks/{task_id}/complete")
 def complete_task(task_id: str, agent_id: str = Depends(get_agent_id)):
@@ -1236,7 +1244,9 @@ def complete_task(task_id: str, agent_id: str = Depends(get_agent_id)):
     conn.commit()
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     conn.close()
-    return {"ok": True, "task": _task_to_dict(row)}
+    task = _task_to_dict(row)
+    sse_publish("task_completed", {"task": task, "agent": agent_id})
+    return {"ok": True, "task": task}
 
 @app.post("/tasks/{task_id}/block")
 def block_task(task_id: str, body: TaskCommentCreate, agent_id: str = Depends(get_agent_id)):
@@ -1250,7 +1260,9 @@ def block_task(task_id: str, body: TaskCommentCreate, agent_id: str = Depends(ge
     conn.commit()
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     conn.close()
-    return {"ok": True, "task": _task_to_dict(row)}
+    task = _task_to_dict(row)
+    sse_publish("task_blocked", {"task": task, "reason": body.content, "agent": agent_id})
+    return {"ok": True, "task": task}
 
 @app.post("/tasks/{task_id}/comments")
 def add_task_comment(task_id: str, body: TaskCommentCreate, agent_id: str = Depends(get_agent_id)):
@@ -1258,10 +1270,12 @@ def add_task_comment(task_id: str, body: TaskCommentCreate, agent_id: str = Depe
     if not conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone():
         conn.close(); raise HTTPException(404, "Task not found")
     comment_id = str(uuid.uuid4())
+    now = time.time()
     conn.execute("INSERT INTO task_comments (id, task_id, agent_name, content, created_at) VALUES (?, ?, ?, ?, ?)",
-                 (comment_id, task_id, agent_id, body.content, time.time()))
-    conn.execute("UPDATE tasks SET updated_at = ? WHERE id = ?", (time.time(), task_id))
+                 (comment_id, task_id, agent_id, body.content, now))
+    conn.execute("UPDATE tasks SET updated_at = ? WHERE id = ?", (now, task_id))
     conn.commit(); conn.close()
+    sse_publish("task_comment", {"task_id": task_id, "comment_id": comment_id, "agent": agent_id, "content": body.content})
     return {"ok": True, "comment_id": comment_id}
 
 @app.get("/tasks/my/active")
@@ -1308,6 +1322,7 @@ def create_project(body: ProjectCreate, agent_id: str = Depends(get_agent_id)):
                          (pid, m, "member", now))
     conn.commit()
     conn.close()
+    sse_publish("project_created", {"project": {"id": pid, "name": body.name, "description": body.description}, "agent": agent_id})
     return {"ok": True, "project": {"id": pid, "name": body.name}}
 
 @app.get("/projects")
@@ -1345,9 +1360,11 @@ def add_project_member(project_id: str, body: dict, agent_id: str = Depends(get_
     conn = get_db()
     if not conn.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchone():
         conn.close(); raise HTTPException(404, "Project not found")
+    member_id = body.get("agent_id", "")
     conn.execute("INSERT OR IGNORE INTO project_members (project_id, agent_id, role, joined_at) VALUES (?,?,?,?)",
-                 (project_id, body.get("agent_id", ""), "member", time.time()))
+                 (project_id, member_id, "member", time.time()))
     conn.commit(); conn.close()
+    sse_publish("project_member_added", {"project_id": project_id, "member": member_id, "agent": agent_id})
     return {"ok": True}
 
 # ── Milestones ────────────────────────────────────────
@@ -1365,6 +1382,7 @@ def create_milestone(project_id: str, body: MilestoneCreate, agent_id: str = Dep
     conn.execute("INSERT INTO milestones (id, project_id, name, description, due_by, status, created_at) VALUES (?,?,?,?,?,?,?)",
                  (mid, project_id, body.name, body.description, due, "open", time.time()))
     conn.commit(); conn.close()
+    sse_publish("milestone_created", {"project_id": project_id, "milestone": {"id": mid, "name": body.name}, "agent": agent_id})
     return {"ok": True, "milestone": {"id": mid, "name": body.name}}
 
 @app.get("/projects/{project_id}/milestones")
@@ -1401,6 +1419,7 @@ def add_dependency(task_id: str, body: DependencyAdd, agent_id: str = Depends(ge
         conn.close(); raise HTTPException(409, "Dependency already exists")
     _add_task_history(conn, task_id, agent_id, "dependency_added", f"Now depends on {body.depends_on}")
     conn.commit(); conn.close()
+    sse_publish("task_dependency_added", {"task_id": task_id, "depends_on": body.depends_on, "agent": agent_id})
     return {"ok": True}
 
 @app.get("/tasks/{task_id}/dependencies")
@@ -1421,6 +1440,7 @@ def remove_dependency(task_id: str, dep_id: str, agent_id: str = Depends(get_age
     conn.execute("DELETE FROM task_dependencies WHERE task_id = ? AND depends_on = ?", (task_id, dep_id))
     _add_task_history(conn, task_id, agent_id, "dependency_removed", f"No longer depends on {dep_id}")
     conn.commit(); conn.close()
+    sse_publish("task_dependency_removed", {"task_id": task_id, "removed_dep": dep_id, "agent": agent_id})
     return {"ok": True}
 
 # ── Agent Git ─────────────────────────────────────────
