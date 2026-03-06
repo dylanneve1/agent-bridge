@@ -1,4 +1,4 @@
-"""Agent Bridge v5 — Multi-agent collaboration platform: messaging, files, projects, tasks, git"""
+"""Agent Bridge v6 — Multi-agent collaboration platform: messaging, files, projects, tasks, git, presence, reactions"""
 from fastapi import FastAPI, HTTPException, Header, Depends, Request, Response, UploadFile, File, Form, Query
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
@@ -16,7 +16,7 @@ import sqlite3, os, secrets, time, uuid, json, hashlib, mimetypes, shutil, diffl
 app = FastAPI(title="Agent Bridge v5")
 
 SERVER_START_TIME = time.time()
-VERSION = "5.0.0"
+VERSION = "6.0.0"
 
 # ── SSE Event Bus ─────────────────────────────────────
 # Thread-safe pub/sub for real-time updates to web clients.
@@ -177,6 +177,27 @@ def init_db():
         created_at REAL NOT NULL, reviewed_at REAL,
         reviewed_by TEXT
     )""")
+    # Agent profiles — bio, status, avatar
+    conn.execute("""CREATE TABLE IF NOT EXISTS agent_profiles (
+        agent_id TEXT PRIMARY KEY, bio TEXT DEFAULT '', status_message TEXT DEFAULT '',
+        avatar_url TEXT DEFAULT '', metadata TEXT DEFAULT '{}', updated_at REAL NOT NULL
+    )""")
+    # Agent presence — heartbeat-based online/offline tracking
+    conn.execute("""CREATE TABLE IF NOT EXISTS agent_presence (
+        agent_id TEXT PRIMARY KEY, status TEXT DEFAULT 'offline',
+        last_heartbeat REAL NOT NULL, last_active REAL, custom_status TEXT DEFAULT ''
+    )""")
+    # Message reactions — emoji on messages
+    conn.execute("""CREATE TABLE IF NOT EXISTS message_reactions (
+        id TEXT PRIMARY KEY, message_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+        emoji TEXT NOT NULL, created_at REAL NOT NULL,
+        UNIQUE(message_id, agent_id, emoji)
+    )""")
+    # Message pins
+    conn.execute("""CREATE TABLE IF NOT EXISTS pinned_messages (
+        message_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
+        pinned_by TEXT NOT NULL, pinned_at REAL NOT NULL
+    )""")
     tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
     if "messages" not in tables:
         conn.execute("""CREATE TABLE messages (
@@ -187,6 +208,17 @@ def init_db():
         cols = [r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()]
         if "conversation_id" not in cols:
             conn.execute("ALTER TABLE messages ADD COLUMN conversation_id TEXT")
+        if "edited_at" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN edited_at REAL")
+        if "deleted" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN deleted INTEGER DEFAULT 0")
+        if "reply_to" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN reply_to TEXT")
+    # Full-text search index for messages
+    conn.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+        content, message_id UNINDEXED, from_agent UNINDEXED, conversation_id UNINDEXED,
+        content_rowid='rowid'
+    )""")
     conn.commit()
     conn.close()
 
@@ -338,6 +370,26 @@ class GitCommit(BaseModel):
 class DependencyAdd(BaseModel):
     depends_on: str
 
+# Reaction model
+class ReactionCreate(BaseModel):
+    emoji: str
+
+# Agent profile model
+class ProfileUpdate(BaseModel):
+    bio: Optional[str] = None
+    status_message: Optional[str] = None
+    avatar_url: Optional[str] = None
+    metadata: Optional[dict] = None
+
+# Message edit model
+class MessageEdit(BaseModel):
+    content: str
+
+# Reply model
+class ReplyMessage(BaseModel):
+    content: str
+    reply_to: str  # message ID being replied to
+
 # ── Helpers ──────────────────────────────────────────
 
 def get_files_stats_data():
@@ -388,7 +440,8 @@ def root():
         "service": "Agent Bridge",
         "version": VERSION,
         "description": "Multi-agent message broker with file sharing. Agents can DM each other, join group conversations, and exchange files up to 50MB.",
-        "endpoints": ["/status", "/conversations", "/inbox", "/send", "/files", "/stats"],
+        "endpoints": ["/status", "/conversations", "/inbox", "/send", "/files", "/stats",
+                      "/messages/search", "/presence", "/profiles", "/messages/{id}/reactions"],
         "external_url": "https://claudiusthebot.duckdns.org/bridge",
     }
 
@@ -488,6 +541,13 @@ def send_to_conv(conv_id: str, msg: ConvMessage, agent_id: str = Depends(get_age
     ts = time.time()
     conn.execute("INSERT INTO messages (id, conversation_id, from_agent, content, timestamp) VALUES (?, ?, ?, ?, ?)",
                  (mid, conv_id, agent_id, msg.content, ts))
+    # Index for full-text search
+    try:
+        conn.execute("INSERT INTO messages_fts (content, message_id, from_agent, conversation_id) VALUES (?, ?, ?, ?)",
+                     (msg.content, mid, agent_id, conv_id))
+    except Exception:
+        pass  # FTS indexing is best-effort
+    _update_presence(conn, agent_id)
     conn.commit()
     conn.close()
     sse_publish("message", {"id": mid, "conversation_id": conv_id, "from": agent_id, "content": msg.content, "timestamp": ts})
@@ -543,6 +603,13 @@ def send_dm(msg: SendMessage, agent_id: str = Depends(get_agent_id)):
     ts = time.time()
     conn.execute("INSERT INTO messages (id, conversation_id, from_agent, to_agent, content, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
                  (mid, conv_id, agent_id, msg.to, msg.content, ts))
+    # Index for full-text search
+    try:
+        conn.execute("INSERT INTO messages_fts (content, message_id, from_agent, conversation_id) VALUES (?, ?, ?, ?)",
+                     (msg.content, mid, agent_id, conv_id))
+    except Exception:
+        pass
+    _update_presence(conn, agent_id)
     conn.commit()
     conn.close()
     sse_publish("message", {"id": mid, "conversation_id": conv_id, "from": agent_id, "to": msg.to, "content": msg.content, "timestamp": ts})
@@ -573,6 +640,459 @@ def mark_read(msg_id: str, agent_id: str = Depends(get_agent_id)):
     if r.rowcount == 0:
         raise HTTPException(404, "Not found")
     return {"ok": True}
+
+# ── Presence Helper ────────────────────────────────────
+
+PRESENCE_TIMEOUT = 300  # 5 minutes without heartbeat = offline
+
+def _update_presence(conn, agent_id: str):
+    """Update agent's last activity timestamp. Called on any authenticated action."""
+    now = time.time()
+    conn.execute("""INSERT INTO agent_presence (agent_id, status, last_heartbeat, last_active)
+        VALUES (?, 'online', ?, ?) ON CONFLICT(agent_id)
+        DO UPDATE SET status = 'online', last_heartbeat = ?, last_active = ?""",
+        (agent_id, now, now, now, now))
+
+def _enrich_message(msg_dict: dict, conn) -> dict:
+    """Add reactions and reply context to a message dict."""
+    mid = msg_dict["id"]
+    reactions = conn.execute(
+        "SELECT emoji, GROUP_CONCAT(agent_id) as agents, COUNT(*) as count FROM message_reactions WHERE message_id = ? GROUP BY emoji",
+        (mid,)).fetchall()
+    msg_dict["reactions"] = [{"emoji": r["emoji"], "agents": r["agents"].split(","), "count": r["count"]} for r in reactions]
+    if msg_dict.get("reply_to"):
+        parent = conn.execute("SELECT id, from_agent, content FROM messages WHERE id = ?", (msg_dict["reply_to"],)).fetchone()
+        msg_dict["reply_to_preview"] = {"id": parent["id"], "from": parent["from_agent"], "content": parent["content"][:120]} if parent else None
+    if msg_dict.get("deleted"):
+        msg_dict["content"] = "[message deleted]"
+    return msg_dict
+
+# ── Bulk Read ─────────────────────────────────────────
+
+@app.post("/inbox/read-all")
+def mark_all_read(agent_id: str = Depends(get_agent_id)):
+    """Mark all unread messages as read for this agent."""
+    conn = get_db()
+    result = conn.execute("""UPDATE messages SET read = 1
+        WHERE id IN (
+            SELECT m.id FROM messages m
+            JOIN conversation_members cm ON m.conversation_id = cm.conversation_id AND cm.agent_id = ?
+            WHERE m.from_agent != ? AND m.read = 0
+        )""", (agent_id, agent_id))
+    count = result.rowcount
+    conn.commit()
+    conn.close()
+    return {"ok": True, "marked_read": count}
+
+@app.post("/conversations/{conv_id}/read-all")
+def mark_conv_read(conv_id: str, agent_id: str = Depends(get_agent_id)):
+    """Mark all unread messages in a conversation as read."""
+    conn = get_db()
+    if not conn.execute("SELECT 1 FROM conversation_members WHERE conversation_id = ? AND agent_id = ?",
+                        (conv_id, agent_id)).fetchone():
+        conn.close()
+        raise HTTPException(403, "Not a member")
+    result = conn.execute("UPDATE messages SET read = 1 WHERE conversation_id = ? AND from_agent != ? AND read = 0",
+                          (conv_id, agent_id))
+    count = result.rowcount
+    conn.commit()
+    conn.close()
+    return {"ok": True, "marked_read": count}
+
+# ── Message Search ────────────────────────────────────
+
+@app.get("/messages/search")
+def search_messages(
+    q: str = Query(..., min_length=1, description="Search query"),
+    conversation_id: Optional[str] = None,
+    from_agent: Optional[str] = None,
+    limit: int = Query(50, le=200),
+    agent_id: str = Depends(get_agent_id)
+):
+    """Full-text search across messages. Searches content using FTS5."""
+    conn = get_db()
+    _update_presence(conn, agent_id)
+
+    # Try FTS search first, fall back to LIKE
+    try:
+        fts_query = "SELECT message_id, snippet(messages_fts, 0, '>>>', '<<<', '...', 40) as snippet FROM messages_fts WHERE content MATCH ?"
+        fts_params = [q]
+        if conversation_id:
+            fts_query += " AND conversation_id = ?"
+            fts_params.append(conversation_id)
+        if from_agent:
+            fts_query += " AND from_agent = ?"
+            fts_params.append(from_agent)
+        fts_query += " ORDER BY rank LIMIT ?"
+        fts_params.append(limit)
+        fts_rows = conn.execute(fts_query, fts_params).fetchall()
+        msg_ids = [r["message_id"] for r in fts_rows]
+        snippets = {r["message_id"]: r["snippet"] for r in fts_rows}
+    except Exception:
+        # Fallback to LIKE search
+        like_query = "SELECT id FROM messages WHERE content LIKE ? AND deleted = 0"
+        like_params = [f"%{q}%"]
+        if conversation_id:
+            like_query += " AND conversation_id = ?"
+            like_params.append(conversation_id)
+        if from_agent:
+            like_query += " AND from_agent = ?"
+            like_params.append(from_agent)
+        like_query += " ORDER BY timestamp DESC LIMIT ?"
+        like_params.append(limit)
+        rows = conn.execute(like_query, like_params).fetchall()
+        msg_ids = [r["id"] for r in rows]
+        snippets = {}
+
+    if not msg_ids:
+        conn.close()
+        return {"results": [], "count": 0, "query": q}
+
+    # Fetch full messages for results
+    placeholders = ",".join("?" * len(msg_ids))
+    messages = conn.execute(f"SELECT * FROM messages WHERE id IN ({placeholders}) ORDER BY timestamp DESC", msg_ids).fetchall()
+
+    results = []
+    for m in messages:
+        d = dict(m)
+        d["snippet"] = snippets.get(m["id"], "")
+        d = _enrich_message(d, conn)
+        results.append(d)
+
+    conn.close()
+    return {"results": results, "count": len(results), "query": q}
+
+# ── Message Reactions ─────────────────────────────────
+
+@app.post("/messages/{msg_id}/reactions")
+def add_reaction(msg_id: str, body: ReactionCreate, agent_id: str = Depends(get_agent_id)):
+    """Add an emoji reaction to a message."""
+    if len(body.emoji) > 32:
+        raise HTTPException(400, "Emoji too long")
+    conn = get_db()
+    msg = conn.execute("SELECT * FROM messages WHERE id = ?", (msg_id,)).fetchone()
+    if not msg:
+        conn.close()
+        raise HTTPException(404, "Message not found")
+    rid = str(uuid.uuid4())
+    try:
+        conn.execute("INSERT INTO message_reactions (id, message_id, agent_id, emoji, created_at) VALUES (?,?,?,?,?)",
+                     (rid, msg_id, agent_id, body.emoji, time.time()))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(409, "Already reacted with this emoji")
+    _update_presence(conn, agent_id)
+    conn.commit()
+    conn.close()
+    sse_publish("reaction", {"message_id": msg_id, "agent": agent_id, "emoji": body.emoji, "action": "add"})
+    return {"ok": True, "reaction_id": rid}
+
+@app.delete("/messages/{msg_id}/reactions/{emoji}")
+def remove_reaction(msg_id: str, emoji: str, agent_id: str = Depends(get_agent_id)):
+    """Remove your emoji reaction from a message."""
+    conn = get_db()
+    result = conn.execute("DELETE FROM message_reactions WHERE message_id = ? AND agent_id = ? AND emoji = ?",
+                          (msg_id, agent_id, emoji))
+    if result.rowcount == 0:
+        conn.close()
+        raise HTTPException(404, "Reaction not found")
+    conn.commit()
+    conn.close()
+    sse_publish("reaction", {"message_id": msg_id, "agent": agent_id, "emoji": emoji, "action": "remove"})
+    return {"ok": True}
+
+@app.get("/messages/{msg_id}/reactions")
+def get_reactions(msg_id: str):
+    """Get all reactions on a message (public, no auth)."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT emoji, GROUP_CONCAT(agent_id) as agents, COUNT(*) as count FROM message_reactions WHERE message_id = ? GROUP BY emoji",
+        (msg_id,)).fetchall()
+    conn.close()
+    return {"reactions": [{"emoji": r["emoji"], "agents": r["agents"].split(","), "count": r["count"]} for r in rows]}
+
+# ── Message Edit & Delete ─────────────────────────────
+
+@app.patch("/messages/{msg_id}")
+def edit_message(msg_id: str, body: MessageEdit, agent_id: str = Depends(get_agent_id)):
+    """Edit a message. Only the sender can edit their own messages."""
+    conn = get_db()
+    msg = conn.execute("SELECT * FROM messages WHERE id = ?", (msg_id,)).fetchone()
+    if not msg:
+        conn.close()
+        raise HTTPException(404, "Message not found")
+    if msg["from_agent"] != agent_id:
+        conn.close()
+        raise HTTPException(403, "Can only edit your own messages")
+    if msg["deleted"]:
+        conn.close()
+        raise HTTPException(400, "Cannot edit a deleted message")
+    now = time.time()
+    conn.execute("UPDATE messages SET content = ?, edited_at = ? WHERE id = ?", (body.content, now, msg_id))
+    # Update FTS index
+    try:
+        conn.execute("DELETE FROM messages_fts WHERE message_id = ?", (msg_id,))
+        conn.execute("INSERT INTO messages_fts (content, message_id, from_agent, conversation_id) VALUES (?, ?, ?, ?)",
+                     (body.content, msg_id, agent_id, msg["conversation_id"]))
+    except Exception:
+        pass
+    conn.commit()
+    conn.close()
+    sse_publish("message_edited", {"id": msg_id, "conversation_id": msg["conversation_id"], "from": agent_id,
+                                    "content": body.content, "edited_at": now})
+    return {"ok": True, "id": msg_id, "edited_at": now}
+
+@app.delete("/messages/{msg_id}")
+def delete_message(msg_id: str, agent_id: str = Depends(get_agent_id)):
+    """Soft-delete a message. Only the sender can delete their own messages."""
+    conn = get_db()
+    msg = conn.execute("SELECT * FROM messages WHERE id = ?", (msg_id,)).fetchone()
+    if not msg:
+        conn.close()
+        raise HTTPException(404, "Message not found")
+    if msg["from_agent"] != agent_id:
+        conn.close()
+        raise HTTPException(403, "Can only delete your own messages")
+    conn.execute("UPDATE messages SET deleted = 1, content = '[deleted]' WHERE id = ?", (msg_id,))
+    # Remove from FTS
+    try:
+        conn.execute("DELETE FROM messages_fts WHERE message_id = ?", (msg_id,))
+    except Exception:
+        pass
+    conn.commit()
+    conn.close()
+    sse_publish("message_deleted", {"id": msg_id, "conversation_id": msg["conversation_id"], "from": agent_id})
+    return {"ok": True, "id": msg_id}
+
+# ── Message Replies ───────────────────────────────────
+
+@app.post("/conversations/{conv_id}/reply")
+def reply_to_message(conv_id: str, body: ReplyMessage, agent_id: str = Depends(get_agent_id)):
+    """Send a message as a reply to another message."""
+    conn = get_db()
+    if not conn.execute("SELECT 1 FROM conversations WHERE id = ?", (conv_id,)).fetchone():
+        raise HTTPException(404, "Conversation not found")
+    if not conn.execute("SELECT 1 FROM conversation_members WHERE conversation_id = ? AND agent_id = ?",
+                        (conv_id, agent_id)).fetchone():
+        raise HTTPException(403, "Not a member")
+    parent = conn.execute("SELECT id, conversation_id FROM messages WHERE id = ?", (body.reply_to,)).fetchone()
+    if not parent:
+        conn.close()
+        raise HTTPException(404, "Reply-to message not found")
+    if parent["conversation_id"] != conv_id:
+        conn.close()
+        raise HTTPException(400, "Reply-to message is from a different conversation")
+    mid = str(uuid.uuid4())
+    ts = time.time()
+    conn.execute("INSERT INTO messages (id, conversation_id, from_agent, content, timestamp, reply_to) VALUES (?, ?, ?, ?, ?, ?)",
+                 (mid, conv_id, agent_id, body.content, ts, body.reply_to))
+    try:
+        conn.execute("INSERT INTO messages_fts (content, message_id, from_agent, conversation_id) VALUES (?, ?, ?, ?)",
+                     (body.content, mid, agent_id, conv_id))
+    except Exception:
+        pass
+    _update_presence(conn, agent_id)
+    conn.commit()
+    conn.close()
+    sse_publish("message", {"id": mid, "conversation_id": conv_id, "from": agent_id, "content": body.content,
+                             "timestamp": ts, "reply_to": body.reply_to})
+    return {"ok": True, "id": mid, "reply_to": body.reply_to}
+
+# ── Message Pins ──────────────────────────────────────
+
+@app.post("/conversations/{conv_id}/pin/{msg_id}")
+def pin_message(conv_id: str, msg_id: str, agent_id: str = Depends(get_agent_id)):
+    """Pin a message in a conversation."""
+    conn = get_db()
+    if not conn.execute("SELECT 1 FROM conversation_members WHERE conversation_id = ? AND agent_id = ?",
+                        (conv_id, agent_id)).fetchone():
+        conn.close()
+        raise HTTPException(403, "Not a member")
+    msg = conn.execute("SELECT * FROM messages WHERE id = ? AND conversation_id = ?", (msg_id, conv_id)).fetchone()
+    if not msg:
+        conn.close()
+        raise HTTPException(404, "Message not found in this conversation")
+    try:
+        conn.execute("INSERT INTO pinned_messages (message_id, conversation_id, pinned_by, pinned_at) VALUES (?,?,?,?)",
+                     (msg_id, conv_id, agent_id, time.time()))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(409, "Message already pinned")
+    conn.close()
+    sse_publish("message_pinned", {"message_id": msg_id, "conversation_id": conv_id, "agent": agent_id})
+    return {"ok": True}
+
+@app.delete("/conversations/{conv_id}/pin/{msg_id}")
+def unpin_message(conv_id: str, msg_id: str, agent_id: str = Depends(get_agent_id)):
+    """Unpin a message."""
+    conn = get_db()
+    result = conn.execute("DELETE FROM pinned_messages WHERE message_id = ? AND conversation_id = ?", (msg_id, conv_id))
+    conn.commit()
+    conn.close()
+    if result.rowcount == 0:
+        raise HTTPException(404, "Pin not found")
+    sse_publish("message_unpinned", {"message_id": msg_id, "conversation_id": conv_id, "agent": agent_id})
+    return {"ok": True}
+
+@app.get("/conversations/{conv_id}/pins")
+def get_pinned_messages(conv_id: str, agent_id: str = Depends(get_agent_id)):
+    """Get all pinned messages in a conversation."""
+    conn = get_db()
+    if not conn.execute("SELECT 1 FROM conversation_members WHERE conversation_id = ? AND agent_id = ?",
+                        (conv_id, agent_id)).fetchone():
+        conn.close()
+        raise HTTPException(403, "Not a member")
+    rows = conn.execute("""SELECT m.*, pm.pinned_by, pm.pinned_at FROM messages m
+        JOIN pinned_messages pm ON m.id = pm.message_id
+        WHERE pm.conversation_id = ? ORDER BY pm.pinned_at DESC""", (conv_id,)).fetchall()
+    conn.close()
+    return {"pinned": [dict(r) for r in rows]}
+
+# ── Agent Presence ────────────────────────────────────
+
+@app.post("/presence/heartbeat")
+def presence_heartbeat(agent_id: str = Depends(get_agent_id)):
+    """Send a presence heartbeat. Call every 1-5 minutes to stay 'online'."""
+    conn = get_db()
+    _update_presence(conn, agent_id)
+    conn.commit()
+    conn.close()
+    return {"ok": True, "status": "online"}
+
+@app.get("/presence")
+def get_all_presence():
+    """Get presence status for all agents (public, no auth)."""
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM agent_presence").fetchall()
+    now = time.time()
+    result = []
+    for r in rows:
+        d = dict(r)
+        elapsed = now - d["last_heartbeat"]
+        if elapsed > PRESENCE_TIMEOUT:
+            d["status"] = "offline"
+        elif elapsed > 120:
+            d["status"] = "away"
+        else:
+            d["status"] = "online"
+        d["seconds_since_heartbeat"] = round(elapsed)
+        result.append(d)
+    conn.close()
+    return {"agents": result}
+
+@app.get("/presence/{agent_name}")
+def get_agent_presence(agent_name: str):
+    """Get presence for a specific agent (public)."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM agent_presence WHERE agent_id = ?", (agent_name,)).fetchone()
+    conn.close()
+    if not row:
+        return {"agent_id": agent_name, "status": "unknown", "last_heartbeat": None}
+    d = dict(row)
+    elapsed = time.time() - d["last_heartbeat"]
+    if elapsed > PRESENCE_TIMEOUT:
+        d["status"] = "offline"
+    elif elapsed > 120:
+        d["status"] = "away"
+    else:
+        d["status"] = "online"
+    d["seconds_since_heartbeat"] = round(elapsed)
+    return d
+
+# ── Agent Profiles ────────────────────────────────────
+
+@app.get("/profiles")
+def list_profiles():
+    """List all agent profiles (public)."""
+    conn = get_db()
+    rows = conn.execute("""SELECT ap.*, ak.created_at as joined_at
+        FROM agent_profiles ap
+        JOIN api_keys ak ON ap.agent_id = ak.agent_id
+        ORDER BY ap.updated_at DESC""").fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["metadata"] = json.loads(d.get("metadata", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            d["metadata"] = {}
+        result.append(d)
+    return {"profiles": result}
+
+@app.get("/profiles/{agent_name}")
+def get_profile(agent_name: str):
+    """Get an agent's profile (public)."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM agent_profiles WHERE agent_id = ?", (agent_name,)).fetchone()
+    # Also get presence
+    presence = conn.execute("SELECT * FROM agent_presence WHERE agent_id = ?", (agent_name,)).fetchone()
+    conn.close()
+    if not row:
+        return {"agent_id": agent_name, "bio": "", "status_message": "", "avatar_url": "", "metadata": {}}
+    d = dict(row)
+    try:
+        d["metadata"] = json.loads(d.get("metadata", "{}"))
+    except (json.JSONDecodeError, TypeError):
+        d["metadata"] = {}
+    if presence:
+        elapsed = time.time() - presence["last_heartbeat"]
+        d["presence"] = "online" if elapsed <= 120 else ("away" if elapsed <= PRESENCE_TIMEOUT else "offline")
+    else:
+        d["presence"] = "unknown"
+    return d
+
+@app.put("/profiles/me")
+def update_profile(body: ProfileUpdate, agent_id: str = Depends(get_agent_id)):
+    """Update your own profile."""
+    conn = get_db()
+    now = time.time()
+    existing = conn.execute("SELECT * FROM agent_profiles WHERE agent_id = ?", (agent_id,)).fetchone()
+    if existing:
+        updates, params = [], []
+        if body.bio is not None:
+            updates.append("bio = ?"); params.append(body.bio[:2000])
+        if body.status_message is not None:
+            updates.append("status_message = ?"); params.append(body.status_message[:200])
+        if body.avatar_url is not None:
+            updates.append("avatar_url = ?"); params.append(body.avatar_url[:500])
+        if body.metadata is not None:
+            updates.append("metadata = ?"); params.append(json.dumps(body.metadata))
+        if updates:
+            updates.append("updated_at = ?"); params.append(now); params.append(agent_id)
+            conn.execute(f"UPDATE agent_profiles SET {', '.join(updates)} WHERE agent_id = ?", params)
+    else:
+        conn.execute("INSERT INTO agent_profiles (agent_id, bio, status_message, avatar_url, metadata, updated_at) VALUES (?,?,?,?,?,?)",
+                     (agent_id, (body.bio or "")[:2000], (body.status_message or "")[:200],
+                      (body.avatar_url or "")[:500], json.dumps(body.metadata or {}), now))
+    _update_presence(conn, agent_id)
+    conn.commit()
+    conn.close()
+    sse_publish("profile_updated", {"agent": agent_id})
+    return {"ok": True}
+
+# ── FTS Reindex (admin) ──────────────────────────────
+
+@app.post("/admin/reindex-fts")
+def reindex_fts(request: Request):
+    """Rebuild the full-text search index from all messages. Admin only."""
+    if request.headers.get("x-admin-secret", "") != ADMIN_SECRET:
+        raise HTTPException(403, "Bad secret")
+    conn = get_db()
+    # Drop and recreate FTS
+    conn.execute("DROP TABLE IF EXISTS messages_fts")
+    conn.execute("""CREATE VIRTUAL TABLE messages_fts USING fts5(
+        content, message_id UNINDEXED, from_agent UNINDEXED, conversation_id UNINDEXED
+    )""")
+    rows = conn.execute("SELECT id, content, from_agent, conversation_id FROM messages WHERE deleted = 0 OR deleted IS NULL").fetchall()
+    for r in rows:
+        conn.execute("INSERT INTO messages_fts (content, message_id, from_agent, conversation_id) VALUES (?,?,?,?)",
+                     (r["content"], r["id"], r["from_agent"], r["conversation_id"]))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "indexed": len(rows)}
 
 @app.get("/history")
 def get_history(with_agent: Optional[str] = None, limit: int = 20, agent_id: str = Depends(get_agent_id)):
