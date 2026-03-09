@@ -218,6 +218,8 @@ class HubHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_seasons()
         elif self.path == '/api/report':
             self.handle_report()
+        elif self.path == '/api/briefings' or self.path.startswith('/api/briefings/'):
+            self.handle_briefings()
         elif self.path.startswith('/api/'):
             bridge_path = self.path[4:]  # strip /api
             self.proxy_bridge(bridge_path)
@@ -539,6 +541,72 @@ class HubHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
+
+    def handle_briefings(self):
+        """Serve daily briefing archives — list or single."""
+        try:
+            briefings_dir = Path.home() / ".openclaw/workspace/projects/daily-briefing/briefings"
+            if not briefings_dir.exists():
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({"briefings": []}).encode())
+                return
+
+            # Single briefing: /api/briefings/2026-03-09
+            if self.path.startswith('/api/briefings/'):
+                date_str = self.path.split('/')[-1]
+                fp = briefings_dir / f"briefing-{date_str}.md"
+                if not fp.exists():
+                    self.send_response(404)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"error": "Briefing not found"}).encode())
+                    return
+                content = fp.read_text()
+                stat = fp.stat()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "date": date_str,
+                    "content": content,
+                    "size": stat.st_size,
+                    "generated": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+                }).encode())
+                return
+
+            # List all briefings
+            files = sorted(briefings_dir.glob("briefing-*.md"), reverse=True)
+            briefings = []
+            for f in files:
+                date = f.stem.replace("briefing-", "")
+                lines = f.read_text().split("\n")
+                # Extract first non-empty content line as preview
+                preview = ""
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#") and not stripped.startswith("_") and not stripped.startswith("---"):
+                        preview = stripped[:120]
+                        break
+                briefings.append({
+                    "date": date,
+                    "preview": preview,
+                    "size": f.stat().st_size,
+                    "generated": datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).isoformat()
+                })
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"briefings": briefings}).encode())
         except Exception as e:
             self.send_response(500)
             self.send_header("Content-Type", "application/json")

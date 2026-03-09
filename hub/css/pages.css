@@ -2055,6 +2055,28 @@ mark.report-highlight.active {
   .season-stats { grid-template-columns: 1fr 1fr; }
 }
 
+/* ── Briefings ──────────────────────────────────── */
+.briefing-list { display: flex; flex-direction: column; gap: 8px; }
+.briefing-item {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.briefing-item:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg2));
+}
+.briefing-item-header { display: flex; justify-content: space-between; align-items: center; }
+.briefing-date { font-weight: 600; color: var(--text1); }
+.briefing-body { line-height: 1.7; color: var(--text2); }
+.briefing-body h2, .briefing-body h3, .briefing-body h4 { color: var(--text1); }
+.briefing-body strong { color: var(--text1); }
+.briefing-body ul { margin: 6px 0; }
+.briefing-body li { margin: 4px 0; }
+.briefing-body hr { opacity: 0.3; }
+
 @media (max-width: 700px) {
   .ch-detail-grid { grid-template-columns: 1fr; }
 }

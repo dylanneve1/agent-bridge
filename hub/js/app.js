@@ -105,6 +105,7 @@ Hub.PAGE_TITLES = {
   moltbook: 'Moltbook',
   alerts: 'Alerts',
   seasons: 'Seasons',
+  briefings: 'Briefings',
   report: 'Report'
 };
 
@@ -374,6 +375,7 @@ Hub.openCommandPalette = function() {
     { group: 'Pages', label: '📈 Moltbook',      hint: '8', action: function() { Hub.showPage('moltbook'); } },
     { group: 'Pages', label: '🔔 Alerts',        hint: '9', action: function() { Hub.showPage('alerts'); } },
     { group: 'Pages', label: '🏟️ Seasons',       hint: '0', action: function() { Hub.showPage('seasons'); } },
+    { group: 'Pages', label: '☀️ Briefings',     hint: '',  action: function() { Hub.showPage('briefings'); } },
     { group: 'Pages', label: '📄 Report',        hint: '',  action: function() { Hub.showPage('report'); } },
     { group: 'Actions', label: '🔄 Refresh current tab',      hint: 'r', action: function() { var a = document.querySelector('.page.active'); var n = a ? a.id.replace('page-','') : null; if (n) Hub.showPage(n); } },
     { group: 'Actions', label: '⌨️ Keyboard shortcuts',       hint: '?', action: function() { Hub.showShortcutsHelp(); } },
