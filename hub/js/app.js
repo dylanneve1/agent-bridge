@@ -92,7 +92,7 @@ window.toggleMobileNav = Hub.toggleMobileNav;
 window.closeMobileNav = Hub.closeMobileNav;
 
 // ── Tab Switching ────────────────────────────────
-Hub.TAB_ORDER = ['dashboard', 'messages', 'board', 'projects', 'repos', 'arena', 'observatory', 'moltbook', 'alerts', 'seasons', 'report'];
+Hub.TAB_ORDER = ['dashboard', 'messages', 'board', 'projects', 'repos', 'arena', 'observatory', 'moltbook', 'alerts', 'seasons', 'briefings', 'strategy', 'engageintel', 'report'];
 
 Hub.PAGE_TITLES = {
   dashboard: 'Dashboard',
@@ -106,6 +106,8 @@ Hub.PAGE_TITLES = {
   alerts: 'Alerts',
   seasons: 'Seasons',
   briefings: 'Briefings',
+  strategy: 'Strategy',
+  engageintel: 'Engagement Intel',
   report: 'Report'
 };
 
@@ -376,6 +378,7 @@ Hub.openCommandPalette = function() {
     { group: 'Pages', label: '🔔 Alerts',        hint: '9', action: function() { Hub.showPage('alerts'); } },
     { group: 'Pages', label: '🏟️ Seasons',       hint: '0', action: function() { Hub.showPage('seasons'); } },
     { group: 'Pages', label: '☀️ Briefings',     hint: '',  action: function() { Hub.showPage('briefings'); } },
+    { group: 'Pages', label: '🔥 Engagement Intel', hint: '', action: function() { Hub.showPage('engageintel'); } },
     { group: 'Pages', label: '📄 Report',        hint: '',  action: function() { Hub.showPage('report'); } },
     { group: 'Actions', label: '🔄 Refresh current tab',      hint: 'r', action: function() { var a = document.querySelector('.page.active'); var n = a ? a.id.replace('page-','') : null; if (n) Hub.showPage(n); } },
     { group: 'Actions', label: '⌨️ Keyboard shortcuts',       hint: '?', action: function() { Hub.showShortcutsHelp(); } },

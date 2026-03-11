@@ -218,6 +218,10 @@ class HubHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_seasons()
         elif self.path == '/api/report':
             self.handle_report()
+        elif self.path == '/api/strategy':
+            self.handle_strategy()
+        elif self.path == '/api/engage-intel':
+            self.handle_engage_intel()
         elif self.path == '/api/briefings' or self.path.startswith('/api/briefings/'):
             self.handle_briefings()
         elif self.path.startswith('/api/'):
@@ -607,6 +611,108 @@ class HubHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"briefings": briefings}).encode())
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
+
+    def handle_strategy(self):
+        """Run strategy dashboard and return JSON."""
+        try:
+            import subprocess
+            dashboard_py = Path.home() / ".openclaw/workspace/projects/strategy-dashboard/dashboard.py"
+            if not dashboard_py.exists():
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Dashboard not found"}).encode())
+                return
+            result = subprocess.run(
+                ["python3", str(dashboard_py), "--json"],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode != 0:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": result.stderr[:500]}).encode())
+                return
+            # Validate it's JSON
+            data = json.loads(result.stdout)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode())
+        except json.JSONDecodeError as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": f"Invalid JSON from dashboard: {e}"}).encode())
+        except subprocess.TimeoutExpired:
+            self.send_response(504)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "Dashboard timed out"}).encode())
+        except Exception as e:
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
+
+    def handle_engage_intel(self):
+        """Aggregate notification-intel + reciprocal-tracker data for engagement heatmap."""
+        try:
+            import subprocess as sp
+            data = {"posts": [], "authors": {}, "reciprocal": {}, "karma": 0, "generated": None}
+
+            # 1. Notification intel JSON
+            intel_py = Path.home() / ".openclaw/workspace/projects/notification-intel/intel.py"
+            if intel_py.exists():
+                r = sp.run(["python3", str(intel_py), "json"], capture_output=True, text=True, timeout=15)
+                if r.returncode == 0:
+                    intel = json.loads(r.stdout)
+                    data["posts"] = intel.get("posts", [])
+                    data["karma"] = intel.get("karma", 0)
+                    data["total_notifications"] = intel.get("total_notifications", 0)
+                    data["active_posts"] = intel.get("active_posts", 0)
+                    data["unique_commenters"] = intel.get("unique_commenters", 0)
+                    data["top_commenters"] = intel.get("top_commenters", [])
+                    data["breakout_posts"] = intel.get("breakout_posts", [])
+
+            # 2. Reciprocal tracker JSON
+            recip_py = Path.home() / ".openclaw/workspace/projects/reciprocal-tracker/reciprocal.py"
+            if recip_py.exists():
+                r = sp.run(["python3", str(recip_py), "json"], capture_output=True, text=True, timeout=15)
+                if r.returncode == 0:
+                    recip = json.loads(r.stdout)
+                    data["reciprocal"] = recip
+
+            # 3. Engagement timeseries (if exists)
+            ts_file = Path.home() / ".config/moltbook/notification-intel/engagement-timeseries.csv"
+            if ts_file.exists():
+                lines = ts_file.read_text().strip().split("\n")
+                ts_data = []
+                for line in lines[1:]:  # skip header
+                    parts = line.split(",")
+                    if len(parts) >= 3:
+                        ts_data.append({"ts": parts[0], "karma": int(parts[1]) if parts[1].isdigit() else 0, "notifs": int(parts[2]) if parts[2].isdigit() else 0})
+                data["timeseries"] = ts_data[-100:]  # last 100 entries
+
+            # 4. Author engagement history
+            author_file = Path.home() / ".config/moltbook/notification-intel/author-engagement.json"
+            if author_file.exists():
+                data["author_history"] = json.loads(author_file.read_text())
+
+            from datetime import datetime, timezone
+            data["generated"] = datetime.now(timezone.utc).isoformat()
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode())
         except Exception as e:
             self.send_response(500)
             self.send_header("Content-Type", "application/json")
